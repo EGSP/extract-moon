@@ -24,7 +24,7 @@ from .paths import RUNS_DIR
 
 # Средние по последним матчам, которые пишутся в metrics.csv: (колонка, знаков после запятой).
 EP_FIELDS = [("launch_rate", 3), ("ep_length", 1), ("charge_frac", 3), ("passengers", 2), ("kills", 2),
-             ("births", 2), ("upgrades", 2), ("signals", 1), ("gives", 2), ("leaves", 2),
+             ("passenger_kills", 2), ("births", 2), ("upgrades", 2), ("signals", 1), ("gives", 2), ("leaves", 2),
              ("pop_mean", 2), ("pop_min", 2), ("pop_max", 2)] + [(f"sig_{i}", 1) for i in range(1, 17)]
 
 

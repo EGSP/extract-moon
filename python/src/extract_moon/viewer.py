@@ -159,6 +159,8 @@ class Renderer:
             a = centers.get(ev.get("src"))
             if ev["type"] in ("attack", "give") and a and ev.get("dst") in centers:
                 pg.draw.line(surf, EVENT_COLORS[ev["type"]], a, centers[ev["dst"]], 3)
+            elif ev["type"] == "attack" and a:  # цель — пассажир в корабле
+                pg.draw.line(surf, EVENT_COLORS["attack"], a, ship_c, 3)
             elif ev["type"] == "deposit" and a:
                 pg.draw.line(surf, EVENT_COLORS["deposit"], a, ship_c, 2)
             elif ev["type"] == "birth" and ev.get("dst") in centers:

@@ -119,3 +119,32 @@ def test_dead_robot_waits_and_gets_faction_share():
     rew, done, info = env.step(main, z, z, z)
     assert info["episodes"][0]["launched"] and done[0, victim]
     assert rew[0, victim] > 0
+
+
+def test_passenger_can_be_killed_and_frees_seat():
+    """Чужой робот рядом с кораблём атакует пассажира; погибший пассажир освобождает место."""
+    cfg = Config()
+    env = ExtractMoonEnv(cfg, 1, seed=5)
+    victim = np.nonzero((env.status[0] == AWAKE) & (env.faction[0] == 0))[0][0]
+    enemy = np.nonzero(env.faction[0] == 1)[0][0]
+    env.pos[0, victim] = env.pos[0, enemy] = env.ship_pos[0]
+    env.observe()
+    z = np.zeros((1, env.R), np.int64)
+    main = z.copy()
+    main[0, victim] = 7  # BOARD
+    env.step(main, z, z, z)
+    assert env.status[0, victim] == BOARDED and env.passengers[0] == 1
+    env.hp[0, victim] = 0.1
+    obs = env.observe()
+    assert obs["main_mask"][0, enemy, 9]  # ATTACK доступна только из-за пассажира
+    main = z.copy()
+    main[0, enemy] = 9
+    env.step(main, z, z, z)
+    assert env.status[0, victim] == DEAD
+    assert env.passengers[0] == 0 and env.passenger_faction[0, 0] == 0
+    assert env.ep_stats[0]["passenger_kills"] == 1
+
+
+def test_legacy_passengers_are_safe():
+    cfg = Config.from_dict({"world": {"map_max": 18}})
+    assert cfg.world.passenger_damage is False

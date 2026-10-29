@@ -103,7 +103,7 @@ class ExtractMoonEnv:
 
     @staticmethod
     def _empty_stats() -> dict:
-        return {"deposited": 0.0, "kills": 0, "births": 0, "upgrades": 0, "signals": 0,
+        return {"deposited": 0.0, "kills": 0, "passenger_kills": 0, "births": 0, "upgrades": 0, "signals": 0,
                 "gives": 0, "rescues": 0, "leaves": 0, "attacks": 0,
                 "pop_sum": 0, "pop_min": None, "pop_max": 0, "signals_by_symbol": None}
 
@@ -190,6 +190,15 @@ class ExtractMoonEnv:
         f = self.faction
         ally = (f[:, :, None] == f[:, None, :]) & (f[:, :, None] >= 0)
         return on_map, cheb, adj, ally
+
+    def _attackable(self, cheb: np.ndarray, adj: np.ndarray, ally: np.ndarray) -> np.ndarray:
+        """Кого может атаковать робот: чужих рядом, а если разрешено — и чужих пассажиров (они в клетке корабля)."""
+        cand = adj & ~ally
+        if self.w.passenger_damage:
+            awake = self.status == AWAKE
+            boarded = self.status == BOARDED
+            cand |= (cheb <= 1) & awake[:, :, None] & boarded[:, None, :] & ~ally
+        return cand
 
     def _ship_dist(self) -> np.ndarray:
         return np.abs(self.pos - self.ship_pos[:, None, :]).max(-1)
@@ -299,7 +308,7 @@ class ExtractMoonEnv:
         mm[..., DEPOSIT] = near_ship & (self.energy > 0) & ~charged[:, None]
         mm[..., BOARD] = near_ship & (self.passengers < self.seats)[:, None]
         mm[..., GIVE] = (adj & ally).any(-1) & (self.energy > self.w.give_amount)
-        mm[..., ATTACK] = (adj & ~ally).any(-1)
+        mm[..., ATTACK] = self._attackable(cheb, adj, ally).any(-1)
         has_free = (st == EMPTY).any(-1)
         mm[..., REPRODUCE] = (self.energy >= w.reproduce_cost + 1) & has_free[:, None]
         mm[..., LEAVE] = ~loner
@@ -382,7 +391,7 @@ class ExtractMoonEnv:
 
         # Атака: урон цели и кража части её энергии.
         at = main == ATTACK
-        cand = adj & ~ally
+        cand = self._attackable(cheb, adj, ally)
         score = np.where(cand, self.hp[:, None, :], np.inf)
         atgt = score.argmin(-1)
         at &= np.isfinite(score.min(-1))
@@ -420,6 +429,7 @@ class ExtractMoonEnv:
         rank = np.argsort(np.argsort(prio, -1), -1)
         bd &= rank < (self.seats - self.passengers)[:, None]
         self.status[bd] = BOARDED
+        self.pos[bd] = np.broadcast_to(self.ship_pos[:, None, :], self.pos.shape)[bd]
         self.passengers += bd.sum(-1)
         be, br = np.nonzero(bd & (self.faction >= 0))
         np.add.at(self.passenger_faction, (be, self.faction[be, br]), 1)
@@ -429,7 +439,13 @@ class ExtractMoonEnv:
         self.faction[lv] = LONER
 
         # Смерть от атак.
-        dead = on_map & (self.hp <= 0) & (self.status != BOARDED)
+        boarded = self.status == BOARDED
+        dead = (on_map & ~boarded | boarded & w.passenger_damage) & (self.hp <= 0)
+        # Погибший пассажир освобождает место.
+        pd = dead & boarded
+        self.passengers -= pd.sum(-1)
+        pe, pr = np.nonzero(pd & (self.faction >= 0))
+        np.subtract.at(self.passenger_faction, (pe, self.faction[pe, pr]), 1)
         rew += dead * rw.destroyed
         killer = at & dead[ar_e, atgt]
         rew += killer * rw.kills
@@ -490,6 +506,7 @@ class ExtractMoonEnv:
             s = self.ep_stats[e]
             s["deposited"] += float(amt[e].sum())
             s["kills"] += int(dead[e].sum())
+            s["passenger_kills"] += int(pd[e].sum())
             s["births"] += int(births[e].sum())
             s["upgrades"] += int(up[e].sum())
             s["signals"] += int(emit[e].sum())

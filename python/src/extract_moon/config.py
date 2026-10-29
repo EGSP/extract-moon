@@ -18,7 +18,7 @@ RULES_VERSION = 3
 # Значения новых параметров, при которых правила работают как до их появления. Применяются к
 # сохранённым конфигам, где параметра ещё нет, — так старые чекпойнты воспроизводятся по своим правилам.
 LEGACY: dict[str, dict] = {
-    "world": {"sight": None},  # r1: видно всё окно обзора
+    "world": {"sight": None, "passenger_damage": False},  # r1: видно всё окно обзора; пассажиры неуязвимы
     "reward": {"dead_wait": False},  # r1: погибший сразу выбывает и не получает долю за союзников
     "model": {},
     "train": {},
@@ -35,8 +35,8 @@ class WorldConfig:
     robots_per_faction_min: int = 3
     robots_per_faction_max: int = 4
     max_robots: int = 24  # число слотов на матч (с учётом потомства)
-    seats_min: int = 3  # N — мест в корабле
-    seats_max: int = 5
+    seats_min: int = 5  # N — мест в корабле
+    seats_max: int = 6
     max_steps: int = 300  # тайм-аут: корабль так и не зарядили — проиграли все
 
     # Корабль: ёмкость (сколько энергии нужно доставить) и зарядка.
@@ -68,6 +68,8 @@ class WorldConfig:
     signal_cost: float = 0.3
     give_amount: float = 3.0
     attack_damage: float = 2.5
+    # Пассажира может атаковать чужой робот рядом с кораблём; погибший пассажир освобождает место.
+    passenger_damage: bool = True
     attack_steal: float = 1.5  # атака отбирает часть энергии цели
     sleeping_damage_mult: float = 2.0
 
