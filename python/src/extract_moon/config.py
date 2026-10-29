@@ -11,6 +11,14 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Версия правил симуляции и наград. Меняется, когда меняется смысл правил, а не просто значения
+# параметров; история версий — в EXPERIMENTS.md.
+RULES_VERSION = 1
+
+# Значения новых параметров, при которых правила работают как до их появления. Применяются к
+# сохранённым конфигам, где параметра ещё нет, — так старые чекпойнты воспроизводятся по своим правилам.
+LEGACY: dict[str, dict] = {"world": {}, "reward": {}, "model": {}, "train": {}}
+
 
 @dataclass
 class WorldConfig:
@@ -141,15 +149,17 @@ class Config:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
-        def build(dc, values):
+        def build(section, dc, values):
             names = {f.name for f in dataclasses.fields(dc)}
-            return dc(**{k: v for k, v in (values or {}).items() if k in names})
+            values = values or {}
+            legacy = {k: v for k, v in LEGACY[section].items() if k not in values} if values else {}
+            return dc(**{k: v for k, v in {**values, **legacy}.items() if k in names})
 
         return cls(
-            world=build(WorldConfig, d.get("world")),
-            reward=build(RewardConfig, d.get("reward")),
-            model=build(ModelConfig, d.get("model")),
-            train=build(TrainConfig, d.get("train")),
+            world=build("world", WorldConfig, d.get("world")),
+            reward=build("reward", RewardConfig, d.get("reward")),
+            model=build("model", ModelConfig, d.get("model")),
+            train=build("train", TrainConfig, d.get("train")),
         )
 
     def save(self, path: Path) -> None:

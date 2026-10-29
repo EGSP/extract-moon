@@ -29,11 +29,18 @@ uv run python tools/check_gpu.py
 Все команды выполняются из папки `python/`.
 
 ```bash
-uv run extract-moon train --run first
+uv run extract-moon train --run r2-base --note "зачем этот запуск"
 ```
 
 Параметры переопределяются через `--set`, например `--set train.total_updates=500 reward.faction_share=0`.
-Продолжить обучение: `--resume first`.
+Продолжить или дообучить: `--resume run900` (последний чекпойнт) или `--resume run900:600`.
+Как называть запуски и что фиксировать перед ними — в [EXPERIMENTS.md](../EXPERIMENTS.md).
+
+Сводка всех запусков (правила, родительская модель, коммит, итог):
+
+```bash
+uv run extract-moon runs
+```
 
 ### Просмотр обучения
 

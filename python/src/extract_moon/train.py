@@ -15,7 +15,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .config import Config
+from . import provenance
+from .config import RULES_VERSION, Config
 from .env import ExtractMoonEnv
 from .model import Policy, distributions, joint_logprob_entropy, pick_device
 from .paths import RUNS_DIR
@@ -50,7 +51,7 @@ def load_checkpoint(path: Path, device) -> tuple[Policy, Config, dict]:
     return model, cfg, ck
 
 
-def train(cfg: Config, run_name: str, resume: Path | None = None) -> Path:
+def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = "") -> Path:
     tc = cfg.train
     device = pick_device(tc.device)
     torch.manual_seed(tc.seed)
@@ -64,10 +65,13 @@ def train(cfg: Config, run_name: str, resume: Path | None = None) -> Path:
     B = E * R
     model = Policy(cfg, env.vec_dim).to(device)
     start_update, total_steps = 0, 0
+    parent = None
     if resume:
         ck = torch.load(resume, map_location=device, weights_only=False)
         model.load_state_dict(ck["model"])
         start_update, total_steps = ck["update"], ck["steps"]
+        parent = {"checkpoint": str(resume), "run": Path(resume).parent.parent.name, "update": ck["update"]}
+    provenance.start(run_dir, RULES_VERSION, note, parent)
     opt = torch.optim.Adam(model.parameters(), lr=tc.lr, eps=1e-5)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"устройство: {device}, параметров: {n_params / 1e6:.2f} млн, потоков: {B}, запуск: {run_dir}")
@@ -79,9 +83,11 @@ def train(cfg: Config, run_name: str, resume: Path | None = None) -> Path:
 
     obs = env.observe()
     state = model.initial_state(B, device)
-    if tc.replay_every and start_update == 0:
-        snapshot_replay(run_dir, ck_dir, model, cfg, env.vec_dim, 0, 0)
+    # Стартовый этап: для дообучения это исходная модель уже по новым правилам.
+    if tc.replay_every and not (run_dir / "replays" / f"u{start_update:06d}_seed{tc.replay_seed}.jsonl.gz").exists():
+        snapshot_replay(run_dir, ck_dir, model, cfg, env.vec_dim, start_update, total_steps)
 
+    row = {}
     for update in range(start_update + 1, tc.total_updates + 1):
         t0 = time.time()
         init_state = state.clone()
@@ -210,6 +216,7 @@ def train(cfg: Config, run_name: str, resume: Path | None = None) -> Path:
             snapshot_replay(run_dir, ck_dir, model, cfg, env.vec_dim, update, total_steps)
 
     metrics_file.close()
+    provenance.finish(run_dir, row)
     return run_dir
 
 

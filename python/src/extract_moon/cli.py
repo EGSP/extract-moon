@@ -1,4 +1,4 @@
-"""Командная строка: extract-moon train | watch | plot | record | view | gif."""
+"""Командная строка: extract-moon train | runs | watch | plot | record | view | gif."""
 
 from __future__ import annotations
 
@@ -13,16 +13,41 @@ from .paths import REPLAYS_DIR, RUNS_DIR
 
 
 def resolve_checkpoint(value: str | None) -> Path | None:
-    """Принимает путь к .pt или имя запуска (тогда берётся его latest.pt)."""
+    """Путь к .pt, имя запуска (его latest.pt) или «запуск:обновление», например run900:600."""
     if not value:
         return None
     p = Path(value)
     if p.exists():
         return p
-    run = RUNS_DIR / value / "checkpoints" / "latest.pt"
-    if run.exists():
-        return run
+    run, _, update = value.partition(":")
+    name = f"model_{int(update):06d}.pt" if update else "latest.pt"
+    ck = RUNS_DIR / run / "checkpoints" / name
+    if ck.exists():
+        return ck
     raise FileNotFoundError(f"чекпойнт не найден: {value}")
+
+
+def list_runs() -> None:
+    from . import provenance
+    from .metrics_view import load_metrics
+
+    rows = []
+    for d in sorted(p for p in RUNS_DIR.iterdir() if p.is_dir()):
+        info, metrics = provenance.load(d), load_metrics(str(d))
+        last = metrics[-1] if metrics else {}
+        parent = info.get("parent")
+        sessions = info.get("sessions") or [{}]
+        commit = sessions[-1].get("code", {})
+        rows.append([
+            d.name, f"r{info['rules']}" if "rules" in info else "?",
+            f"{parent['run']}:{parent['update']}" if parent else "—",
+            (commit.get("commit", "")[:7] + ("*" if commit.get("dirty") else "")) or "?",
+            last.get("update", "—"), last.get("launch_rate", "—"), info.get("note", ""),
+        ])
+    head = ["запуск", "правила", "от модели", "коммит", "обновл.", "взлёты", "заметка"]
+    widths = [max(len(str(r[i])) for r in rows + [head]) for i in range(len(head) - 1)]
+    for r in [head] + rows:
+        print("  ".join(str(v).ljust(w) for v, w in zip(r, widths)) + "  " + str(r[-1]))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -33,8 +58,11 @@ def main(argv: list[str] | None = None) -> None:
     t = sub.add_parser("train", help="обучить политику PPO")
     t.add_argument("--run", default=None, help="имя запуска (по умолчанию — дата и время)")
     t.add_argument("--config", type=Path, default=None, help="JSON-конфиг")
-    t.add_argument("--resume", default=None, help="продолжить с чекпойнта или запуска")
+    t.add_argument("--resume", default=None, help="продолжить с чекпойнта: путь, запуск или запуск:обновление")
+    t.add_argument("--note", default="", help="зачем этот запуск; сохраняется в run.json")
     t.add_argument("--set", nargs="*", default=[], metavar="SECTION.KEY=VALUE", help="переопределить параметры")
+
+    sub.add_parser("runs", help="список запусков: правила, родительская модель, коммит, итог")
 
     r = sub.add_parser("record", help="записать реплей матча")
     r.add_argument("--checkpoint", default=None, help="путь к .pt или имя запуска; без него — необученная сеть")
@@ -67,7 +95,9 @@ def main(argv: list[str] | None = None) -> None:
         cfg = Config.load(a.config) if a.config else Config()
         cfg = cfg.override(a.set)
         run = a.run or time.strftime("%Y%m%d_%H%M%S")
-        train(cfg, run, resolve_checkpoint(a.resume))
+        train(cfg, run, resolve_checkpoint(a.resume), a.note)
+    elif a.cmd == "runs":
+        list_runs()
     elif a.cmd == "record":
         from .replay import record_episode
 
