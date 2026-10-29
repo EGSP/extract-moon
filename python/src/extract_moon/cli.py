@@ -65,6 +65,9 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("runs", help="список запусков: правила, родительская модель, коммит, итог")
     sub.add_parser("explorer", help="окно со всеми запусками и кнопками просмотра")
+    m = sub.add_parser("models", help="3D-справочник архитектур: схемы и модели всех запусков в браузере")
+    m.add_argument("--port", type=int, default=8765)
+    m.add_argument("--no-browser", action="store_true", help="не открывать браузер")
 
     r = sub.add_parser("record", help="записать реплей матча")
     r.add_argument("--checkpoint", default=None, help="путь к .pt или имя запуска; без него — необученная сеть")
@@ -106,6 +109,10 @@ def main(argv: list[str] | None = None) -> None:
         from .explorer import run_explorer
 
         run_explorer()
+    elif a.cmd == "models":
+        from .model_viewer import serve
+
+        serve(a.port, not a.no_browser)
     elif a.cmd == "record":
         from .replay import record_episode
 

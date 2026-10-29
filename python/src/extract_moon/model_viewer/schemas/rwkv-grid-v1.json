@@ -1,0 +1,258 @@
+{
+  "format": 1,
+  "id": "rwkv-grid-v1",
+  "title": "RWKV-политика с окном обзора",
+  "description": "Робот видит клетки вокруг себя и знает свои показатели, а решить должен, что делать в этот такт. Кодировщик сжимает оба входа в один вектор такта. Слои RWKV добавляют к нему память о прошлых тактах, поэтому робот помнит, где видел корабль или врага. Головы превращают результат в выбор действия, улучшения и сигнала, а критик оценивает положение для обучения. Все числа хранятся в float32.",
+  "model_file": "python/src/extract_moon/model.py",
+  "model_commit": "c737a992addfc6822c7ced73887e061958743496",
+  "dtype": "float32",
+  "batch": "роботы, которые ходят в этот такт, при обучении T×B",
+  "vars": [
+    {"name": "d", "expr": "model.d_model", "desc": "ширина скрытого вектора"},
+    {"name": "L", "expr": "model.n_layers", "desc": "число слоёв RWKV"},
+    {"name": "F", "expr": "model.ffn_mult", "desc": "расширение channel-mix"},
+    {"name": "H", "expr": "model.head_hidden", "desc": "скрытый слой голов"},
+    {"name": "K", "expr": "2 * world.view_radius + 1", "desc": "сторона окна обзора"},
+    {"name": "C", "expr": "7", "desc": "каналы окна, env.GRID_CHANNELS"},
+    {"name": "S", "expr": "(K + 1) // 2", "desc": "сторона карты признаков после свёртки с шагом 2"},
+    {"name": "conv_out", "expr": "64 * S * S", "desc": "длина развёрнутых признаков свёртки"},
+    {"name": "n_main", "expr": "12", "desc": "основных действий, env.N_MAIN"},
+    {"name": "n_upg", "expr": "4", "desc": "вариантов улучшения, env.N_UPGRADE"},
+    {"name": "n_sym", "expr": "world.signal_symbols + 1", "desc": "символов сигнала с молчанием"},
+    {"name": "n_lvl", "expr": "world.signal_levels", "desc": "уровней сигнала"},
+    {"name": "n_self", "expr": "31 + world.factions_max", "desc": "собственные признаки робота и прошлое действие"},
+    {"name": "n_signal", "expr": "world.signals_heard * (n_sym + 6)", "desc": "услышанные сигналы"},
+    {"name": "vec", "expr": "n_self + n_signal", "desc": "длина векторного входа, env.vec_dim"},
+    {"name": "slots", "expr": "5", "desc": "векторов состояния в слое, model.STATE_SLOTS"}
+  ],
+  "blocks": [
+    {
+      "id": "obs_grid", "title": "Окно обзора", "group": "input", "component": "tensor",
+      "desc": "Сеть должна знать, что находится рядом с роботом. Поэтому окно K×K клеток вокруг него подаётся как картинка с отдельным каналом на каждый вид объектов. Клетки дальше радиуса зрения закрыты туманом и равны нулю. Так радиус зрения меняется правилами, а форма входа остаётся прежней.",
+      "outputs": [{"name": "grid", "shape": ["C", "K", "K"]}],
+      "labels": ["за картой", "источник", "корабль", "свой бодрый", "свой спящий", "чужой бодрый", "чужой спящий"],
+      "layout": {"stage": "0", "row": -1}
+    },
+    {
+      "id": "obs_vec", "title": "Признаки робота", "group": "input", "component": "tensor",
+      "desc": "Часть сведений на карте не видна: энергия, прочность, улучшения, фракция робота. Их и направление на корабль сеть получает отдельным вектором. Туда же входят прошлое действие и до M сигналов, услышанных в прошлый такт. Так сеть знает, что делала сама и что ей сообщили другие.",
+      "outputs": [{"name": "vec", "shape": ["vec"]}],
+      "layout": {"stage": "0", "row": 1}
+    },
+    {
+      "id": "conv1", "title": "Свёртка 1", "group": "encoder", "component": "conv",
+      "desc": "Отдельная клетка мало что говорит, важнее, что стоит рядом. Свёртка 3×3 смотрит на каждую клетку вместе с соседями и находит простые сочетания, например врага рядом с источником. На выходе 32 карты признаков того же размера, что окно.",
+      "inputs": [{"name": "grid", "shape": ["C", "K", "K"]}],
+      "outputs": [{"name": "h", "shape": ["32", "K", "K"]}],
+      "params": [
+        {"name": "weight", "torch": "conv.0.weight", "shape": ["32", "C", "3", "3"]},
+        {"name": "bias", "torch": "conv.0.bias", "shape": ["32"]}
+      ],
+      "layout": {"stage": "1", "row": -1}
+    },
+    {
+      "id": "conv2", "title": "Свёртка 2", "group": "encoder", "component": "conv",
+      "desc": "Вторая свёртка идёт с шагом 2, поэтому карта уменьшается вдвое, а каждый признак охватывает больший участок. Получается 64 карты, которые Flatten разворачивает в один длинный вектор.",
+      "inputs": [{"name": "h", "shape": ["32", "K", "K"]}],
+      "outputs": [{"name": "h", "shape": ["64", "S", "S"]}],
+      "params": [
+        {"name": "weight", "torch": "conv.2.weight", "shape": ["64", "32", "3", "3"]},
+        {"name": "bias", "torch": "conv.2.bias", "shape": ["64"]}
+      ],
+      "layout": {"stage": "2", "row": -1}
+    },
+    {
+      "id": "grid_proj", "title": "Проекция окна", "group": "encoder", "component": "dense",
+      "desc": "Развёрнутые признаки свёртки слишком длинные для ядра. Linear сжимает их до d чисел и оставляет то, что нужно для решений. На этот блок приходится большая часть весов кодировщика, потому что у него самый длинный вход.",
+      "inputs": [{"name": "flat", "shape": ["conv_out"]}],
+      "outputs": [{"name": "g", "shape": ["d"]}],
+      "params": [
+        {"name": "weight", "torch": "grid_proj.weight", "shape": ["d", "conv_out"]},
+        {"name": "bias", "torch": "grid_proj.bias", "shape": ["d"]}
+      ],
+      "layout": {"stage": "3", "row": -1}
+    },
+    {
+      "id": "vec_proj", "title": "Проекция признаков", "group": "encoder", "component": "dense",
+      "desc": "Признаки робота приводятся к той же длине d, что и признаки окна. После этого оба вектора можно объединить.",
+      "inputs": [{"name": "vec", "shape": ["vec"]}],
+      "outputs": [{"name": "v", "shape": ["d"]}],
+      "params": [
+        {"name": "weight", "torch": "vec_proj.0.weight", "shape": ["d", "vec"]},
+        {"name": "bias", "torch": "vec_proj.0.bias", "shape": ["d"]}
+      ],
+      "layout": {"stage": "3", "row": 1}
+    },
+    {
+      "id": "merge", "title": "Слияние", "group": "encoder", "component": "merge",
+      "desc": "Две проекции склеиваются в вектор 2d, и Linear сжимает его обратно до d. LayerNorm выравнивает масштаб чисел, чтобы слоям RWKV было проще учиться. Получается вектор такта: что робот видит и чем располагает.",
+      "inputs": [{"name": "g", "shape": ["d"]}, {"name": "v", "shape": ["d"]}],
+      "outputs": [{"name": "x", "shape": ["d"]}],
+      "params": [
+        {"name": "merge.weight", "torch": "merge.weight", "shape": ["d", "2 * d"]},
+        {"name": "merge.bias", "torch": "merge.bias", "shape": ["d"]},
+        {"name": "ln0.weight", "torch": "ln0.weight", "shape": ["d"]},
+        {"name": "ln0.bias", "torch": "ln0.bias", "shape": ["d"]}
+      ],
+      "layout": {"stage": "4", "row": 0}
+    },
+    {
+      "id": "rwkv", "title": "Слой RWKV", "group": "core", "component": "rwkv_layer", "repeat": "L",
+      "desc": "Одного такта мало для решения, робот должен помнить, где видел корабль и что было раньше. Слой RWKV хранит состояние фиксированного размера и обновляет его на каждом такте. Сначала time-mix смешивает новый такт с памятью, потом channel-mix перерабатывает результат. Результат каждого шага прибавляется к входу, поэтому сигнал проходит через слой, даже пока слой не обучен. Когда память робота сбрасывается, состояние обнуляется.",
+      "inputs": [{"name": "x", "shape": ["d"]}, {"name": "state", "shape": ["slots", "d"]}],
+      "outputs": [{"name": "x", "shape": ["d"]}, {"name": "state", "shape": ["slots", "d"]}],
+      "state": {
+        "shape": ["slots", "d"],
+        "slots": [
+          {"name": "att_x", "desc": "вход time-mix прошлого такта"},
+          {"name": "aa", "desc": "числитель WKV"},
+          {"name": "bb", "desc": "знаменатель WKV"},
+          {"name": "pp", "desc": "опорная экспонента для устойчивости"},
+          {"name": "ffn_x", "desc": "вход channel-mix прошлого такта"}
+        ]
+      },
+      "parts": [
+        {
+          "id": "ln1", "title": "LayerNorm 1", "desc": "Выравнивает масштаб чисел перед time-mix.",
+          "params": [
+            {"name": "weight", "torch": "blocks.{i}.ln1.weight", "shape": ["d"]},
+            {"name": "bias", "torch": "blocks.{i}.ln1.bias", "shape": ["d"]}
+          ]
+        },
+        {
+          "id": "time_mix", "title": "Time-mix WKV",
+          "desc": "Это память слоя. Для каждого канала WKV держит взвешенное среднее прошлых value, и старые такты затухают со своей скоростью exp(time_decay). Поэтому одни каналы помнят несколько тактов, а другие сотни. Текущий такт получает добавку time_first, чтобы свежие события были заметнее. Receptance решает, какую часть памяти выпустить дальше.",
+          "params": [
+            {"name": "time_decay", "torch": "blocks.{i}.att.time_decay", "shape": ["d"]},
+            {"name": "time_first", "torch": "blocks.{i}.att.time_first", "shape": ["d"]},
+            {"name": "mix_k", "torch": "blocks.{i}.att.mix_k", "shape": ["d"]},
+            {"name": "mix_v", "torch": "blocks.{i}.att.mix_v", "shape": ["d"]},
+            {"name": "mix_r", "torch": "blocks.{i}.att.mix_r", "shape": ["d"]},
+            {"name": "key", "torch": "blocks.{i}.att.key.weight", "shape": ["d", "d"]},
+            {"name": "value", "torch": "blocks.{i}.att.value.weight", "shape": ["d", "d"]},
+            {"name": "receptance", "torch": "blocks.{i}.att.receptance.weight", "shape": ["d", "d"]},
+            {"name": "output", "torch": "blocks.{i}.att.output.weight", "shape": ["d", "d"]}
+          ]
+        },
+        {
+          "id": "ln2", "title": "LayerNorm 2", "desc": "Выравнивает масштаб чисел перед channel-mix.",
+          "params": [
+            {"name": "weight", "torch": "blocks.{i}.ln2.weight", "shape": ["d"]},
+            {"name": "bias", "torch": "blocks.{i}.ln2.bias", "shape": ["d"]}
+          ]
+        },
+        {
+          "id": "channel_mix", "title": "Channel-mix FFN",
+          "desc": "Time-mix собирает сведения из прошлого, а channel-mix их перерабатывает. Key расширяет вектор до F·d, квадрат ReLU усиливает сильные признаки, value сжимает обратно до d. Receptance через сигмоиду решает, какую часть результата пропустить.",
+          "params": [
+            {"name": "mix_k", "torch": "blocks.{i}.ffn.mix_k", "shape": ["d"]},
+            {"name": "mix_r", "torch": "blocks.{i}.ffn.mix_r", "shape": ["d"]},
+            {"name": "key", "torch": "blocks.{i}.ffn.key.weight", "shape": ["F * d", "d"]},
+            {"name": "value", "torch": "blocks.{i}.ffn.value.weight", "shape": ["d", "F * d"]},
+            {"name": "receptance", "torch": "blocks.{i}.ffn.receptance.weight", "shape": ["d", "d"]}
+          ]
+        }
+      ],
+      "layout": {"stage": "5 + i", "row": 0}
+    },
+    {
+      "id": "ln_out", "title": "Выходная нормировка", "group": "core", "component": "norm",
+      "desc": "Выравнивает масштаб выхода последнего слоя RWKV. Этот вектор получают все головы.",
+      "inputs": [{"name": "x", "shape": ["d"]}],
+      "outputs": [{"name": "h", "shape": ["d"]}],
+      "params": [
+        {"name": "weight", "torch": "ln_out.weight", "shape": ["d"]},
+        {"name": "bias", "torch": "ln_out.bias", "shape": ["d"]}
+      ],
+      "layout": {"stage": "5 + L", "row": 0}
+    },
+    {
+      "id": "main_head", "title": "Действие", "group": "heads", "component": "head",
+      "desc": "Выбирает, что робот делает в этот такт. Голова выдаёт оценку для каждого из n_main действий, и действие выбирается по этим оценкам. Недопустимые действия маскируются. У действий размножиться и уйти в начале обучения отрицательные смещения, чтобы необученная сеть не делала их слишком часто.",
+      "inputs": [{"name": "h", "shape": ["d"]}],
+      "outputs": [{"name": "logits", "shape": ["n_main"]}],
+      "labels": ["ждать", "вверх", "вниз", "влево", "вправо", "добыть", "зарядить", "сесть", "отдать", "атаковать", "размножиться", "уйти"],
+      "params": [
+        {"name": "hidden.weight", "torch": "main_head.0.weight", "shape": ["H", "d"]},
+        {"name": "hidden.bias", "torch": "main_head.0.bias", "shape": ["H"]},
+        {"name": "out.weight", "torch": "main_head.2.weight", "shape": ["n_main", "H"]},
+        {"name": "out.bias", "torch": "main_head.2.bias", "shape": ["n_main"]}
+      ],
+      "layout": {"stage": "6 + L", "row": -2}
+    },
+    {
+      "id": "upg_head", "title": "Улучшение", "group": "heads", "component": "head",
+      "desc": "Выбирает, во что вложить энергию для улучшения тела. Вариант ничего в начале получает смещение +5, поэтому необученная сеть не тратит энергию впустую.",
+      "inputs": [{"name": "h", "shape": ["d"]}],
+      "outputs": [{"name": "logits", "shape": ["n_upg"]}],
+      "labels": ["ничего", "ёмкость", "броня", "добыча"],
+      "params": [
+        {"name": "hidden.weight", "torch": "upg_head.0.weight", "shape": ["H", "d"]},
+        {"name": "hidden.bias", "torch": "upg_head.0.bias", "shape": ["H"]},
+        {"name": "out.weight", "torch": "upg_head.2.weight", "shape": ["n_upg", "H"]},
+        {"name": "out.bias", "torch": "upg_head.2.bias", "shape": ["n_upg"]}
+      ],
+      "layout": {"stage": "6 + L", "row": -1}
+    },
+    {
+      "id": "sym_head", "title": "Символ сигнала", "group": "heads", "component": "head",
+      "desc": "Выбирает символ сигнала для других роботов. Символ 0 означает молчание и в начале получает смещение +4. Сами символы ничего не значат, смысл им дают роботы при обучении.",
+      "inputs": [{"name": "h", "shape": ["d"]}],
+      "outputs": [{"name": "logits", "shape": ["n_sym"]}],
+      "params": [
+        {"name": "hidden.weight", "torch": "sym_head.0.weight", "shape": ["H", "d"]},
+        {"name": "hidden.bias", "torch": "sym_head.0.bias", "shape": ["H"]},
+        {"name": "out.weight", "torch": "sym_head.2.weight", "shape": ["n_sym", "H"]},
+        {"name": "out.bias", "torch": "sym_head.2.bias", "shape": ["n_sym"]}
+      ],
+      "layout": {"stage": "6 + L", "row": 0}
+    },
+    {
+      "id": "val_head", "title": "Уровень сигнала", "group": "heads", "component": "head",
+      "desc": "Выбирает уровень сигнала. Учитывается, только когда робот подаёт сигнал.",
+      "inputs": [{"name": "h", "shape": ["d"]}],
+      "outputs": [{"name": "logits", "shape": ["n_lvl"]}],
+      "params": [
+        {"name": "hidden.weight", "torch": "val_head.0.weight", "shape": ["H", "d"]},
+        {"name": "hidden.bias", "torch": "val_head.0.bias", "shape": ["H"]},
+        {"name": "out.weight", "torch": "val_head.2.weight", "shape": ["n_lvl", "H"]},
+        {"name": "out.bias", "torch": "val_head.2.bias", "shape": ["n_lvl"]}
+      ],
+      "layout": {"stage": "6 + L", "row": 1}
+    },
+    {
+      "id": "value_head", "title": "Критик", "group": "heads", "component": "head",
+      "desc": "Оценивает, насколько хорошо положение робота. Оценка нужна только при обучении PPO, чтобы понять, какие действия оказались лучше ожидаемого. В матче она не используется.",
+      "inputs": [{"name": "h", "shape": ["d"]}],
+      "outputs": [{"name": "value", "shape": ["1"]}],
+      "params": [
+        {"name": "hidden.weight", "torch": "value_head.0.weight", "shape": ["H", "d"]},
+        {"name": "hidden.bias", "torch": "value_head.0.bias", "shape": ["H"]},
+        {"name": "out.weight", "torch": "value_head.2.weight", "shape": ["1", "H"]},
+        {"name": "out.bias", "torch": "value_head.2.bias", "shape": ["1"]}
+      ],
+      "layout": {"stage": "6 + L", "row": 2}
+    }
+  ],
+  "edges": [
+    {"from": "obs_grid", "to": "conv1"},
+    {"from": "conv1", "to": "conv2"},
+    {"from": "conv2", "to": "grid_proj", "shape": ["conv_out"], "label": "Flatten"},
+    {"from": "obs_vec", "to": "vec_proj"},
+    {"from": "grid_proj", "to": "merge"},
+    {"from": "vec_proj", "to": "merge"},
+    {"from": "merge", "to": "rwkv"},
+    {"from": "rwkv", "to": "ln_out"},
+    {"from": "ln_out", "to": "main_head"},
+    {"from": "ln_out", "to": "upg_head"},
+    {"from": "ln_out", "to": "sym_head"},
+    {"from": "ln_out", "to": "val_head"},
+    {"from": "ln_out", "to": "value_head"}
+  ],
+  "groups": {
+    "input": "Вход",
+    "encoder": "Кодировщик",
+    "core": "Ядро RWKV",
+    "heads": "Головы"
+  }
+}
