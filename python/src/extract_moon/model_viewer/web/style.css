@@ -54,9 +54,11 @@ main { position: relative; min-width: 0; }
 #tools { display: flex; gap: 1px; align-items: start; }
 #warning { position: absolute; top: 72px; left: 16px; right: 16px; padding: 10px 14px;
   background: #fcf4d6f2; border-left: 3px solid var(--warn); color: var(--text); font-size: 13px; }
-#legend { position: absolute; left: 16px; right: 16px; bottom: 36px; display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--text2); }
+#bottom { position: absolute; left: 16px; right: 16px; bottom: 12px; pointer-events: none; }
+#legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--text2); }
+#hint { margin-top: 6px; font-size: 12px; color: var(--muted); max-width: 760px; }
 #legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
-#status { position: absolute; right: 16px; bottom: 14px; color: var(--muted); font-size: 12px; }
+#status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--muted); font-size: 13px; pointer-events: none; }
 
 #card { border-left-width: 1px; padding: 16px; }
 #card h2 { font-size: 20px; font-weight: 400; margin: 4px 0 8px; }
@@ -73,3 +75,49 @@ td:last-child { text-align: right; color: var(--text2); font-size: 12px; padding
 .slots div { display: flex; gap: 10px; color: var(--text2); }
 .slots code { color: #0043ce; min-width: 48px; }
 .hint { color: var(--muted); font-size: 12px; }
+
+/* Иконки, справочник, карточки, гизмо. */
+.icon { flex: none; vertical-align: middle; }
+button { display: inline-flex; align-items: center; gap: 8px; }
+.item { display: flex; gap: 10px; align-items: flex-start; }
+.item > div { min-width: 0; }
+.item.arch { padding-top: 14px; padding-bottom: 12px; }
+.item.arch .icon { color: var(--accent); margin-top: 1px; }
+.item.run { display: block; padding: 7px 16px 7px 46px; border-bottom: 0; }
+.item.run .name { font-weight: 400; font-size: 13px; }
+.item .meta { display: flex; align-items: center; gap: 6px; }
+.tag { display: inline-block; margin-left: 8px; font-size: 11px; font-weight: 400; padding: 0 8px; border-radius: 12px;
+  background: #d0e2ff; color: #0043ce; vertical-align: 1px; }
+.pad { padding: 16px; }
+#warning div { display: flex; gap: 8px; align-items: flex-start; }
+#warning .icon { color: #8e6a00; margin-top: 1px; }
+#card .lead { font-size: 15px; color: var(--text); line-height: 1.5; }
+#card h4 { font-size: 12px; margin: 14px 0 6px; font-weight: 600; }
+#card .gap { margin-top: 20px; }
+a.back { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-block; padding: 3px 10px; font-size: 12px; border-radius: 12px; color: var(--text);
+  background: color-mix(in srgb, var(--c) 12%, white); border: 1px solid color-mix(in srgb, var(--c) 35%, white); }
+.flow { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin: 14px 0 4px; }
+.flow > div { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.flow > .icon { color: var(--muted); margin-bottom: 4px; }
+.groups { display: flex; flex-direction: column; gap: 1px; }
+.group { display: block; padding: 10px 12px; background: var(--layer); color: var(--text); cursor: pointer; text-decoration: none !important; }
+.group:hover { background: var(--layer-hover); }
+.group .gt { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.group .gt i { width: 10px; height: 10px; }
+.group .gt span { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 12px; }
+.group p { margin: 4px 0 0; font-size: 13px; }
+.links { display: flex; flex-direction: column; }
+.links a { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; border-bottom: 1px solid var(--line); }
+.parts { display: flex; flex-direction: column; gap: 10px; }
+.parts p { margin: 2px 0 0; font-size: 13px; }
+details { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 10px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+details[open] summary { margin-bottom: 8px; }
+details p { font-size: 13px; }
+.gizmo { position: absolute; right: 16px; top: 64px; width: 100px; height: 100px; border-radius: 50%;
+  background: #f4f4f4cc; }
+.gizmo [data-axis] { cursor: pointer; }
+.gizmo [data-axis]:hover circle { stroke: #161616; stroke-width: 2; }
+.gizmo text { font: 600 11px "IBM Plex Sans", sans-serif; fill: #fff; pointer-events: none; }

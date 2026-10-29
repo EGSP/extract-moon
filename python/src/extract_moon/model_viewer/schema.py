@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
+import re
 import math
 import operator
 import subprocess
@@ -69,6 +71,22 @@ class Scope:
             self.used = saved | self.used
 
 
+def plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    return one if n % 10 == 1 else few if 2 <= n % 10 <= 4 else many
+
+
+def fmt(text: str, values: dict) -> str:
+    """Подставляет в текст переменные схемы: {d} — число, {L|слой|слоя|слоёв} — слово в нужной форме."""
+    def sub(m):
+        name, *forms = m.group(1).split("|")
+        v = values[name]
+        return plural(int(v), *forms) if forms else f"{v:,}".replace(",", " ")
+    return re.sub(r"\{([^{}]+)\}", sub, text or "")
+
+
 def load_schemas() -> dict[str, dict]:
     return {s["id"]: s for s in (json.loads(p.read_text(encoding="utf-8")) for p in sorted(SCHEMAS_DIR.glob("*.json")))}
 
@@ -97,7 +115,8 @@ def instantiate(schema: dict, cfg: dict) -> dict:
             sc.vars["i"] = i
 
             def build():
-                parts = [{"id": p["id"], "title": p["title"], "desc": p.get("desc", ""), "params": params(p["params"], i)}
+                parts = [{"id": p["id"], "title": p["title"], "desc": p.get("desc", ""),
+                          "purpose": fmt(p.get("purpose", ""), sc.vars), "params": params(p["params"], i)}
                          for p in b.get("parts", [])]
                 for p in parts:
                     p["count"] = sum(q["count"] for q in p["params"])
@@ -107,6 +126,7 @@ def instantiate(schema: dict, cfg: dict) -> dict:
                     "base": b["id"], "index": i, "repeat": n if "repeat" in b else None,
                     "title": b["title"] + (f" {i + 1}" if "repeat" in b else ""),
                     "group": b["group"], "component": b["component"], "desc": b.get("desc", ""),
+                    "purpose": fmt(b.get("purpose", ""), sc.vars),
                     "inputs": tensors(b.get("inputs")), "outputs": tensors(b.get("outputs")),
                     "params": own, "parts": parts, "labels": b.get("labels"),
                     "state": b.get("state") and {"shape": sc.shape(b["state"]["shape"]), "slots": b["state"]["slots"]},
@@ -132,8 +152,10 @@ def instantiate(schema: dict, cfg: dict) -> dict:
     groups = {}
     for b in blocks:
         groups[b["group"]] = groups.get(b["group"], 0) + b["param_count"]
+    values = {v["name"]: sc.vars[v["name"]] for v in schema["vars"]}
     return {
         "schema": schema["id"], "blocks": blocks, "edges": edges,
+        "title": fmt(schema.get("arch_title", schema["title"]), values),
         "vars": {v["name"]: sc.vars[v["name"]] for v in schema["vars"]},
         "total_params": sum(b["param_count"] for b in blocks), "group_params": groups,
         "config": {k: cfg[k.split(".")[0]][k.split(".")[1]] for k in sorted(sc.used)},
@@ -223,17 +245,40 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
 
 
+def arch_key(schema_id: str, inst: dict) -> str:
+    """Модели с одинаковыми тензорами весов — одна архитектура, как бы их ни обучали."""
+    sig = json.dumps([schema_id, sorted(torch_shapes(inst).items())])
+    return hashlib.sha1(sig.encode()).hexdigest()[:8]
+
+
 def catalog() -> dict:
+    """Архитектуры, у каждой список моделей-запусков на ней."""
     schemas = load_schemas()
-    default_cfg = Config().to_dict()
-    out_schemas = []
-    for s in schemas.values():
-        out_schemas.append({
-            "id": s["id"], "title": s["title"], "description": s["description"], "batch": s.get("batch", ""),
-            "model_file": s["model_file"], "model_commit": s["model_commit"], "groups": s.get("groups", {}),
-            "vars": s["vars"], "default": s["id"] == DEFAULT_SCHEMA, "status": schema_status(s),
-            "instance": instantiate(s, default_cfg),
-        })
-    runs = [run_entry(d, schemas) for d in sorted(RUNS_DIR.iterdir())
-            if d.is_dir() and (d / "config.json").exists()] if RUNS_DIR.exists() else []
-    return {"schemas": out_schemas, "runs": runs, "default_schema": DEFAULT_SCHEMA}
+    archs: dict[str, dict] = {}
+
+    def arch_for(s: dict, inst: dict) -> dict:
+        key = arch_key(s["id"], inst)
+        if key not in archs:
+            archs[key] = {"id": key, "schema": s["id"], "title": inst["title"], "default": False,
+                          "instance": inst, "runs": []}
+        return archs[key]
+
+    for s in schemas.values():  # архитектура конфига по умолчанию есть всегда, даже без запусков
+        arch_for(s, instantiate(s, Config().to_dict()))["default"] = s["id"] == DEFAULT_SCHEMA
+    orphans = []
+    if RUNS_DIR.exists():
+        for d in sorted(RUNS_DIR.iterdir()):
+            if not (d.is_dir() and (d / "config.json").exists()):
+                continue
+            run = run_entry(d, schemas)
+            inst = run.pop("instance", None)
+            if inst is None:
+                orphans.append(run)
+            else:
+                run["arch"] = arch_for(schemas[run["schema"]], inst)["id"]
+                archs[run["arch"]]["runs"].append(run)
+    meta = [{"id": s["id"], "title": s["title"], "description": s["description"], "summary": s.get("summary", ""),
+             "batch": s.get("batch", ""), "model_commit": s["model_commit"], "groups": s.get("groups", {}),
+             "vars": s["vars"], "status": schema_status(s)} for s in schemas.values()]
+    order = sorted(archs.values(), key=lambda a: (not a["default"], a["instance"]["total_params"]))
+    return {"schemas": meta, "archs": order, "orphans": orphans}

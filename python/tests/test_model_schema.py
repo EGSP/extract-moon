@@ -20,6 +20,7 @@ def test_schema_matches_model(layers, d, mult):
 
 def test_catalog_builds():
     cat = catalog()
-    assert cat["schemas"] and all("instance" in s for s in cat["schemas"])
-    for run in cat["runs"]:
-        assert run["error"] or run["instance"]["total_params"] > 0
+    assert cat["archs"] and cat["archs"][0]["default"]
+    for arch in cat["archs"]:
+        assert arch["instance"]["total_params"] > 0
+        assert all(run["arch"] == arch["id"] for run in arch["runs"])

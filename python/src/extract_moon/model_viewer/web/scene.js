@@ -17,6 +17,18 @@ const lg = n => Math.log2(n + 1);
 const prod = s => s.reduce((a, b) => a * b, 1);
 export const shapeText = s => ['B', ...s].join('×');
 
+export function plural(n, one, few, many) {
+  const m = Math.abs(n) % 100, k = m % 10;
+  return m >= 11 && m <= 14 ? many : k === 1 ? one : k >= 2 && k <= 4 ? few : many;
+}
+// Размер тензора простыми словами: «7 слоёв 11×11» или «192 числа».
+export function sizeText(s) {
+  if (s.length === 3) return `${s[0]} ${plural(s[0], 'слой', 'слоя', 'слоёв')} ${s[1]}×${s[2]}`;
+  if (s.length === 1) return `${s[0].toLocaleString('ru-RU')} ${plural(s[0], 'число', 'числа', 'чисел')}`;
+  if (s.length === 2) return `${s[0]} по ${s[1]} ${plural(s[1], 'числу', 'числа', 'чисел')}`;
+  return s.join('×');
+}
+
 // Детерминированный шум: у каждой клетки своя фаза «активации».
 function rand(seed) { const x = Math.sin(seed * 12.9898) * 43758.5453; return x - Math.floor(x); }
 
@@ -31,8 +43,8 @@ function glowTexture() {
 const GLOW = glowTexture();
 
 function solid(color, opts = {}) {
-  return new THREE.MeshPhysicalMaterial({
-    color, emissive: color, emissiveIntensity: 0.18, roughness: 0.35, metalness: 0.1, clearcoat: 0.6, ...opts,
+  return new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: 0.18, roughness: 0.35, metalness: 0.1, ...opts,
   });
 }
 function glass(color, opacity = 0.35) {
@@ -258,11 +270,30 @@ const COMPONENTS = {
 
 // ---------------------------------------------------------------- сцена
 
-export function createScene(container, { onHover, onSelect }) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const AXES = [
+  { name: 'X', dir: new THREE.Vector3(1, 0, 0), color: '#da1e28' },
+  { name: 'Y', dir: new THREE.Vector3(0, 1, 0), color: '#24a148' },
+  { name: 'Z', dir: new THREE.Vector3(0, 0, 1), color: '#0f62fe' },
+];
+// Движение камеры: [вправо, вверх, вперёд].
+const MOVE_KEYS = { KeyW: [0, 0, 1], KeyS: [0, 0, -1], KeyA: [-1, 0, 0], KeyD: [1, 0, 0], KeyE: [0, 1, 0], KeyQ: [0, -1, 0] };
+const FRAME_MS = 1000 / 30;  // анимация не чаще 30 кадров в секунду
+const UP = new THREE.Vector3(0, 1, 0);
+
+// Без видеокарты браузер рисует WebGL на процессоре и занимает все ядра, поэтому там нет теней.
+function softwareGL(renderer) {
+  const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : '';
+  return /swiftshader|llvmpipe|software|basic render/i.test(name);
+}
+
+export function createScene(container, { onHover, onSelect, onCamera }) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  const soft = softwareGL(renderer);
+  renderer.shadowMap.enabled = !soft;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = false;  // тени считаются заново только при смене модели
   renderer.toneMapping = THREE.NoToneMapping;
   container.appendChild(renderer.domElement);
   const labels = new CSS2DRenderer();
@@ -275,18 +306,21 @@ export function createScene(container, { onHover, onSelect }) {
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 400);
-  camera.position.set(10, 22, 40);
+  const persp = new THREE.PerspectiveCamera(42, 1, 0.1, 600);
+  const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -500, 1000);
+  const tanHalf = Math.tan(THREE.MathUtils.degToRad(persp.fov) / 2);
+  let camera = persp, orthoH = 10;
+  persp.position.set(10, 22, 40);
   const controls = new OrbitControls(camera, labels.domElement);
   controls.enableDamping = true;
-  controls.maxPolarAngle = Math.PI * 0.48;
-  controls.minDistance = 3; controls.maxDistance = 160;
+  controls.minDistance = 3; controls.maxDistance = 250;
+  let dirty = true;
+  controls.addEventListener('change', () => { dirty = true; });
 
   scene.add(new THREE.HemisphereLight('#ffffff', '#c6c6c6', 0.7));
   const sun = new THREE.DirectionalLight('#ffffff', 1.6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.radius = 6;
   sun.shadow.bias = -0.0005;
   scene.add(sun, sun.target);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.ShadowMaterial({ opacity: 0.12 }));
@@ -295,15 +329,14 @@ export function createScene(container, { onHover, onSelect }) {
   grid.position.y = -0.01;
   scene.add(ground, grid);
 
-
   const selRing = new THREE.Mesh(new THREE.RingGeometry(1, 1.08, 96),
-    new THREE.MeshBasicMaterial({ color: '#f8fafc', transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+    new THREE.MeshBasicMaterial({ color: '#161616', transparent: true, opacity: 0.7, side: THREE.DoubleSide }));
   selRing.rotation.x = -Math.PI / 2; selRing.position.y = 0.03; selRing.visible = false;
   scene.add(selRing);
 
   let root = null, blocks = new Map(), edges = [], pickables = [], animated = [];
-  let hovered = null, selected = null, flow = true, fly = null;
-  const clock = new THREE.Clock();
+  let hovered = null, selected = null, animate = false, fly = null, animT = 0, last = 0;
+  const keys = new Set();
 
   function clear() {
     if (!root) return;
@@ -316,9 +349,9 @@ export function createScene(container, { onHover, onSelect }) {
     root = null; blocks = new Map(); edges = []; pickables = []; animated = [];
   }
 
-  function label(text, sub, cls = 'lbl') {
+  function label(text, sub) {
     const el = document.createElement('div');
-    el.className = cls;
+    el.className = 'lbl';
     el.innerHTML = `<b></b>${sub ? '<span></span>' : ''}`;
     el.querySelector('b').textContent = text;
     if (sub) el.querySelector('span').textContent = sub;
@@ -340,18 +373,19 @@ export function createScene(container, { onHover, onSelect }) {
         [].concat(o.material || []).forEach(m => { m.userData.baseEmissive = m.emissiveIntensity; });
       });
       const out = b.outputs[0]?.shape;
-      const lbl = label(b.title, out ? shapeText(out) : '');
+      const lbl = label(b.title, out ? sizeText(out) : '');
       lbl.position.set(0, size.y / 2 + (b.component === 'rwkv_layer' ? 0.9 : 0.55), 0);
-      lbl.element.addEventListener('click', () => onSelect(b.id));
+      lbl.element.dataset.block = b.id;
       lbl.element.addEventListener('pointerenter', () => setHover(b.id));
       lbl.element.addEventListener('pointerleave', () => setHover(null));
       obj.add(lbl);
       root.add(obj);
-      blocks.set(b.id, { b, obj, size, color, scale: 1 });
+      blocks.set(b.id, { b, obj, size, color });
     }
     for (const e of inst.edges) addEdge(e);
+    animated.forEach(f => f(animT));  // начальный кадр, он же остаётся при выключенной анимации
     fitShadows();
-    setHover(null); select(null, false);
+    hovered = null; select(null, false);
     overview(false);
   }
 
@@ -366,25 +400,19 @@ export function createScene(container, { onHover, onSelect }) {
     const tubeMat = new THREE.MeshBasicMaterial({ color: A.color, transparent: true, opacity: 0.35, depthWrite: false });
     const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 48, width, 8), tubeMat);
     const n = Math.round(10 + 2 * lg(prod(e.shape))), pos = new Float32Array(n * 3);
-    const ptsMat = new THREE.PointsMaterial({ size: 0.28, map: GLOW, color: A.color, transparent: true,
-      depthWrite: false });
+    const ptsMat = new THREE.PointsMaterial({ size: 0.28, map: GLOW, color: A.color, transparent: true, depthWrite: false });
     const pts = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(pos, 3)), ptsMat);
     pts.frustumCulled = false;
+    pts.visible = animate;
     root.add(tube, pts);
-    if (e.label) {
-      const l = label(e.label, shapeText(e.shape), 'lbl edge');
-      l.position.copy(curve.getPointAt(0.5)).add(new THREE.Vector3(0, 0.45, 0));
-      root.add(l);
-    }
-    const len = curve.getLength(), p = new THREE.Vector3();
+    // Точки кривой считаются один раз: искать точку по длине на каждом кадре дорого.
+    const path = curve.getSpacedPoints(240), len = curve.getLength();
     edges.push({
-      e, tubeMat, ptsMat,
+      e, tubeMat, ptsMat, pts,
       animate(t) {
-        pts.visible = flow;
-        if (!flow) return;
         for (let i = 0; i < n; i++) {
-          curve.getPointAt(((i / n) + t * 2.2 / len) % 1, p);
-          pos.set([p.x, p.y, p.z], i * 3);
+          const p = path[Math.floor((((i / n) + t * 2.2 / len) % 1) * 240)];
+          pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
         }
         pts.geometry.attributes.position.needsUpdate = true;
       },
@@ -406,17 +434,28 @@ export function createScene(container, { onHover, onSelect }) {
     sun.target.position.copy(c);
     Object.assign(sun.shadow.camera, { left: -r, right: r, top: r, bottom: -r, near: 0.5, far: r * 4 });
     sun.shadow.camera.updateProjectionMatrix();
+    renderer.shadowMap.needsUpdate = true;
   }
 
-  function flyTo(target, position, ms = 900) {
-    fly = { t0: performance.now(), ms, fromT: controls.target.clone(), toT: target,
-      fromP: camera.position.clone(), toP: position };
+  // ------------------------------------------------ камера
+
+  // Расстояние до цели, которому соответствует текущий вид; у ортографической камеры его задаёт масштаб.
+  function viewDist() {
+    return camera === persp ? camera.position.distanceTo(controls.target) : orthoH / ortho.zoom / tanHalf;
   }
 
-  function overview(animate = true) {
+  function flyTo(target, dir, dist, ms = 800) {
+    const toP = target.clone().addScaledVector(dir, camera === persp ? dist : 150);
+    fly = { t0: performance.now(), ms, fromT: controls.target.clone(), toT: target.clone(),
+      fromP: camera.position.clone(), toP, fromZ: ortho.zoom, toZ: orthoH / (dist * tanHalf) };
+  }
+
+  function viewDir() { return camera.position.clone().sub(controls.target).normalize(); }
+
+  function overview(smooth = true) {
     const box = bounds(), c = box.getCenter(new THREE.Vector3());
     // Подбираем расстояние, при котором все углы рамки модели попадают в кадр с полями.
-    const dir = new THREE.Vector3(0.12, 0.72, 0.7).normalize(), cam = camera.clone(), p = new THREE.Vector3();
+    const dir = new THREE.Vector3(0.12, 0.72, 0.7).normalize(), cam = persp.clone(), p = new THREE.Vector3();
     const corners = [0, 1, 2, 3, 4, 5, 6, 7].map(i => new THREE.Vector3(
       i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z));
     let lo = 1, hi = 400;
@@ -426,9 +465,33 @@ export function createScene(container, { onHover, onSelect }) {
       const fits = corners.every(q => { p.copy(q).project(cam); return Math.abs(p.x) < 0.92 && Math.abs(p.y) < 0.8; });
       if (fits) hi = d; else lo = d;
     }
-    const pos = c.clone().addScaledVector(dir, hi);
-    if (animate) flyTo(c, pos);
-    else { controls.target.copy(c); camera.position.copy(pos); }
+    flyTo(c, dir, hi, smooth ? 800 : 0);
+  }
+
+  // Вид вдоль оси: камера смотрит на цель со стороны dir.
+  function snap(dir) {
+    const d = dir.clone();
+    if (Math.abs(d.y) > 0.999) d.z = 0.001;  // строго сверху камере не определить, где верх
+    flyTo(controls.target.clone(), d.normalize(), viewDist(), 500);
+  }
+
+  function setProjection(orthographic) {
+    if ((camera === ortho) === orthographic) return;
+    const dist = viewDist(), dir = viewDir();
+    if (orthographic) {
+      orthoH = dist * tanHalf;
+      ortho.zoom = 1;
+      ortho.position.copy(controls.target).addScaledVector(dir, 150);
+      camera = ortho;
+    } else {
+      persp.position.copy(controls.target).addScaledVector(dir, dist);
+      camera = persp;
+    }
+    camera.up.copy(UP);
+    controls.object = camera;
+    resize();
+    controls.update();
+    onCamera?.(orthographic);
   }
 
   function select(id, focus = true) {
@@ -440,33 +503,37 @@ export function createScene(container, { onHover, onSelect }) {
       selRing.scale.setScalar(r);
       selRing.position.set(s.obj.position.x, 0.03, s.obj.position.z);
       selRing.material.color.set(s.color);
-      if (focus) {
-        const target = s.obj.position.clone();
-        const dir = camera.position.clone().sub(controls.target).normalize();
-        const dist = Math.max(9, s.size.length() * 2.6);
-        flyTo(target, target.clone().add(dir.multiplyScalar(dist)));
-      }
+      if (focus) flyTo(s.obj.position.clone(), viewDir(), Math.max(9, s.size.length() * 2.6));
     }
-    refreshEdges();
+    paint();
   }
 
   function setHover(id) {
     if (hovered === id) return;
     hovered = id;
     renderer.domElement.style.cursor = labels.domElement.style.cursor = id ? 'pointer' : '';
-    refreshEdges();
+    paint();
     onHover?.(id);
   }
 
-  function refreshEdges() {
+  // Подсветка меняется только при наведении и выборе, а не на каждом кадре.
+  function paint() {
+    for (const [id, s] of blocks) {
+      const boost = id === hovered ? 2.2 : id === selected ? 1.6 : 1;
+      s.obj.traverse(o => [].concat(o.material || []).forEach(m => {
+        if (m.emissive) m.emissiveIntensity = m.userData.baseEmissive * boost;
+      }));
+    }
     for (const { e, tubeMat, ptsMat } of edges) {
       const hot = [hovered, selected].some(id => id && (e.from === id || e.to === id));
       tubeMat.opacity = hot ? 0.75 : 0.35;
       ptsMat.size = hot ? 0.42 : 0.26;
     }
+    dirty = true;
   }
 
-  // Выбор мышью: клик без перетаскивания.
+  // ------------------------------------------------ мышь и клавиатура
+
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
   let down = null;
   function pick(ev) {
@@ -478,49 +545,125 @@ export function createScene(container, { onHover, onSelect }) {
   const dom = labels.domElement;
   dom.addEventListener('pointermove', ev => { if (!down && ev.target === dom) setHover(pick(ev)); });
   dom.addEventListener('pointerdown', ev => { down = [ev.clientX, ev.clientY]; });
+  // OrbitControls захватывает указатель, поэтому клик по подписи приходит сюда, а не в саму подпись.
   dom.addEventListener('pointerup', ev => {
-    if (down && Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) < 5 && ev.target === dom) onSelect(pick(ev));
+    if (down && Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) < 5) {
+      const lbl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.lbl');
+      onSelect(lbl ? lbl.dataset.block : pick(ev));
+    }
     down = null;
   });
   dom.addEventListener('pointerleave', () => setHover(null));
 
+  const typing = ev => ['INPUT', 'TEXTAREA'].includes(ev.target.tagName);
+  addEventListener('keydown', ev => {
+    if (typing(ev) || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (MOVE_KEYS[ev.code]) { keys.add(ev.code); ev.preventDefault(); }
+    if (ev.key === 'Shift') keys.add('Shift');
+  });
+  addEventListener('keyup', ev => { keys.delete(ev.code); if (ev.key === 'Shift') keys.delete('Shift'); });
+  addEventListener('blur', () => keys.clear());
+
+  const move = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3();
+  function walk(dt) {
+    let x = 0, y = 0, z = 0;
+    for (const k of keys) if (MOVE_KEYS[k]) { x += MOVE_KEYS[k][0]; y += MOVE_KEYS[k][1]; z += MOVE_KEYS[k][2]; }
+    if (!x && !y && !z) return false;
+    // Вперёд значит по направлению взгляда, положенному на пол; при виде сверху это верх экрана.
+    fwd.copy(controls.target).sub(camera.position).setY(0);
+    if (fwd.lengthSq() < 1e-6) fwd.set(0, 1, 0).applyQuaternion(camera.quaternion).setY(0);
+    fwd.normalize();
+    right.crossVectors(fwd, UP).normalize();
+    const speed = viewDist() * 0.5 * (keys.has('Shift') ? 2.5 : 1) * dt;
+    move.set(0, 0, 0).addScaledVector(right, x).addScaledVector(UP, y).addScaledVector(fwd, z).multiplyScalar(speed);
+    camera.position.add(move); controls.target.add(move);
+    return true;
+  }
+
+  // ------------------------------------------------ осевой гизмо
+
+  const gizmo = document.createElement('div');
+  gizmo.className = 'gizmo';
+  gizmo.innerHTML = '<svg viewBox="0 0 100 100" width="100" height="100"></svg>';
+  container.appendChild(gizmo);
+  const gsvg = gizmo.querySelector('svg');
+  gsvg.addEventListener('click', ev => {
+    const el = ev.target.closest('[data-axis]');
+    if (!el) return;
+    const a = AXES.find(x => x.name === el.dataset.axis[0]);
+    snap(a.dir.clone().multiplyScalar(el.dataset.axis[1] === '-' ? -1 : 1));
+  });
+  const inv = new THREE.Quaternion(), v = new THREE.Vector3();
+  function drawGizmo() {
+    inv.copy(camera.quaternion).invert();
+    const items = [];
+    for (const a of AXES) for (const sign of [1, -1]) {
+      v.copy(a.dir).multiplyScalar(sign).applyQuaternion(inv);
+      items.push({ a, sign, x: 50 + v.x * 34, y: 50 - v.y * 34, z: v.z });
+    }
+    items.sort((p, q) => p.z - q.z);
+    gsvg.innerHTML = items.map(({ a, sign, x, y }) => {
+      const id = a.name + (sign > 0 ? '+' : '-');
+      return sign > 0
+        ? `<line x1="50" y1="50" x2="${x}" y2="${y}" stroke="${a.color}" stroke-width="2"/>
+           <g data-axis="${id}"><title>Вид со стороны +${a.name}</title><circle cx="${x}" cy="${y}" r="10" fill="${a.color}"/>
+           <text x="${x}" y="${y + 4}" text-anchor="middle">${a.name}</text></g>`
+        : `<g data-axis="${id}"><title>Вид со стороны -${a.name}</title><circle cx="${x}" cy="${y}" r="7" fill="#fff" stroke="${a.color}" stroke-width="2"/></g>`;
+    }).join('');
+  }
+
+  // ------------------------------------------------ кадр
+
   function resize() {
     const { clientWidth: w, clientHeight: h } = container;
+    if (!w || !h) return;
     renderer.setSize(w, h); labels.setSize(w, h);
-    camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+    const aspect = w / h;
+    persp.aspect = aspect; persp.updateProjectionMatrix();
+    Object.assign(ortho, { left: -orthoH * aspect, right: orthoH * aspect, top: orthoH, bottom: -orthoH });
+    ortho.updateProjectionMatrix();
+    dirty = true;
   }
   new ResizeObserver(resize).observe(container);
   resize();
 
   const ease = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
-  renderer.setAnimationLoop(() => {
-    const t = clock.getElapsedTime();
-    animated.forEach(f => f(t));
-    edges.forEach(e => e.animate(t));
-    for (const [id, s] of blocks) {
-      const goal = id === hovered ? 1.05 : 1;
-      s.scale += (goal - s.scale) * 0.15;
-      s.obj.scale.setScalar(s.scale);
-      const boost = id === hovered ? 2.2 : id === selected ? 1.6 : 1;
-      s.obj.traverse(o => [].concat(o.material || []).forEach(m => {
-        if (m.emissive) m.emissiveIntensity = m.userData.baseEmissive * boost;
-      }));
-    }
-    if (selRing.visible) selRing.material.opacity = 0.55 + 0.3 * Math.sin(t * 3);
+  // Кадр рисуется, только когда что-то изменилось; анимация идёт не чаще 30 кадров в секунду.
+  renderer.setAnimationLoop(now => {
+    const dt = Math.min(0.1, (now - (last || now)) / 1000);
+    let changed = dirty;
     if (fly) {
-      const k = Math.min(1, (performance.now() - fly.t0) / fly.ms), e = ease(k);
+      const k = fly.ms ? Math.min(1, (now - fly.t0) / fly.ms) : 1, e = ease(k);
       controls.target.lerpVectors(fly.fromT, fly.toT, e);
       camera.position.lerpVectors(fly.fromP, fly.toP, e);
+      if (camera === ortho) { ortho.zoom = THREE.MathUtils.lerp(fly.fromZ, fly.toZ, e); ortho.updateProjectionMatrix(); }
       if (k >= 1) fly = null;
+      changed = true;
     }
-    controls.update();
+    if (walk(dt)) changed = true;
+    if (controls.update()) changed = true;
+    const frameDue = animate && now - last >= FRAME_MS;
+    if (!changed && !frameDue) return;
+    if (animate) {
+      animT += dt;
+      animated.forEach(f => f(animT));
+      edges.forEach(e => e.animate(animT));
+      if (selRing.visible) selRing.material.opacity = 0.45 + 0.3 * Math.sin(animT * 3);
+    }
     renderer.render(scene, camera);
     labels.render(scene, camera);
+    drawGizmo();
+    dirty = false;
+    last = now;
   });
 
   return {
-    show, select, overview,
-    setFlow(v) { flow = v; },
-    setLabels(v) { labels.domElement.classList.toggle('hide-labels', !v); },
+    show, select, overview, setProjection, soft,
+    snapAxis(name, sign = 1) { snap(AXES.find(a => a.name === name).dir.clone().multiplyScalar(sign)); },
+    isOrtho: () => camera === ortho,
+    setAnimate(v) { animate = v; edges.forEach(e => { e.pts.visible = v; }); dirty = true; },
+    isAnimating: () => animate,
+    setLabels(v) { labels.domElement.classList.toggle('hide-labels', !v); dirty = true; },
   };
 }
+
