@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Версия правил симуляции и наград. Меняется, когда меняется смысл правил, а не просто значения
 # параметров; история версий — в EXPERIMENTS.md.
-RULES_VERSION = 2
+RULES_VERSION = 3
 
 # Значения новых параметров, при которых правила работают как до их появления. Применяются к
 # сохранённым конфигам, где параметра ещё нет, — так старые чекпойнты воспроизводятся по своим правилам.
@@ -28,8 +28,8 @@ LEGACY: dict[str, dict] = {
 @dataclass
 class WorldConfig:
     # Размер буфера карты. Активная область каждого матча случайна в пределах [map_min, map_max].
-    map_max: int = 36
-    map_min: int = 28
+    map_max: int = 18
+    map_min: int = 14
     factions_min: int = 2
     factions_max: int = 3
     robots_per_faction_min: int = 3
@@ -37,7 +37,7 @@ class WorldConfig:
     max_robots: int = 24  # число слотов на матч (с учётом потомства)
     seats_min: int = 3  # N — мест в корабле
     seats_max: int = 5
-    max_steps: int = 400  # тайм-аут: корабль так и не зарядили — проиграли все
+    max_steps: int = 300  # тайм-аут: корабль так и не зарядили — проиграли все
 
     # Корабль: ёмкость (сколько энергии нужно доставить) и зарядка.
     ship_capacity_min: float = 80.0
@@ -51,8 +51,8 @@ class WorldConfig:
     # не доводят роботов до корабля, и сеть с нуля учится просто стоять на месте.
     capsule_distance: float = 0.35
 
-    hotspots_min: int = 6  # карта вдвое больше прежней — точек тоже больше
-    hotspots_max: int = 9
+    hotspots_min: int = 3
+    hotspots_max: int = 5
     sources_per_hotspot: int = 3
     source_amount_min: float = 15.0
     source_amount_max: float = 30.0
