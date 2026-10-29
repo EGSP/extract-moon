@@ -1,4 +1,4 @@
-"""Командная строка: extract-moon train | runs | watch | plot | record | view | gif."""
+"""Командная строка: extract-moon train | runs | explorer | watch | plot | record | view | gif."""
 
 from __future__ import annotations
 
@@ -51,7 +51,8 @@ def list_runs() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    sys.stdout.reconfigure(errors="replace")  # консоль Windows может быть в cp1251
+    if sys.stdout:  # под pythonw консоли нет
+        sys.stdout.reconfigure(errors="replace")  # консоль Windows может быть в cp1251
     ap = argparse.ArgumentParser(prog="extract-moon")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -63,6 +64,7 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--set", nargs="*", default=[], metavar="SECTION.KEY=VALUE", help="переопределить параметры")
 
     sub.add_parser("runs", help="список запусков: правила, родительская модель, коммит, итог")
+    sub.add_parser("explorer", help="окно со всеми запусками и кнопками просмотра")
 
     r = sub.add_parser("record", help="записать реплей матча")
     r.add_argument("--checkpoint", default=None, help="путь к .pt или имя запуска; без него — необученная сеть")
@@ -80,7 +82,7 @@ def main(argv: list[str] | None = None) -> None:
 
     v = sub.add_parser("view", help="открыть реплей, папку реплеев или все этапы запуска")
     v.add_argument("replay", help="файл .jsonl.gz, папка или имя запуска")
-    v.add_argument("--cell", type=int, default=28)
+    v.add_argument("--cell", type=int, default=None, help="размер клетки; по умолчанию — под размер экрана")
 
     g = sub.add_parser("gif", help="экспортировать реплей в GIF")
     g.add_argument("replay", type=Path)
@@ -98,6 +100,10 @@ def main(argv: list[str] | None = None) -> None:
         train(cfg, run, resolve_checkpoint(a.resume), a.note)
     elif a.cmd == "runs":
         list_runs()
+    elif a.cmd == "explorer":
+        from .explorer import run_explorer
+
+        run_explorer()
     elif a.cmd == "record":
         from .replay import record_episode
 

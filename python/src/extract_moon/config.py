@@ -13,18 +13,23 @@ from pathlib import Path
 
 # Версия правил симуляции и наград. Меняется, когда меняется смысл правил, а не просто значения
 # параметров; история версий — в EXPERIMENTS.md.
-RULES_VERSION = 1
+RULES_VERSION = 2
 
 # Значения новых параметров, при которых правила работают как до их появления. Применяются к
 # сохранённым конфигам, где параметра ещё нет, — так старые чекпойнты воспроизводятся по своим правилам.
-LEGACY: dict[str, dict] = {"world": {}, "reward": {}, "model": {}, "train": {}}
+LEGACY: dict[str, dict] = {
+    "world": {"sight": None},  # r1: видно всё окно обзора
+    "reward": {"dead_wait": False},  # r1: погибший сразу выбывает и не получает долю за союзников
+    "model": {},
+    "train": {},
+}
 
 
 @dataclass
 class WorldConfig:
     # Размер буфера карты. Активная область каждого матча случайна в пределах [map_min, map_max].
-    map_max: int = 18
-    map_min: int = 14
+    map_max: int = 36
+    map_min: int = 28
     factions_min: int = 2
     factions_max: int = 3
     robots_per_faction_min: int = 3
@@ -32,7 +37,7 @@ class WorldConfig:
     max_robots: int = 24  # число слотов на матч (с учётом потомства)
     seats_min: int = 3  # N — мест в корабле
     seats_max: int = 5
-    max_steps: int = 300  # тайм-аут: корабль так и не зарядили — проиграли все
+    max_steps: int = 400  # тайм-аут: корабль так и не зарядили — проиграли все
 
     # Корабль: ёмкость (сколько энергии нужно доставить) и зарядка.
     ship_capacity_min: float = 80.0
@@ -46,8 +51,8 @@ class WorldConfig:
     # не доводят роботов до корабля, и сеть с нуля учится просто стоять на месте.
     capsule_distance: float = 0.35
 
-    hotspots_min: int = 3
-    hotspots_max: int = 5
+    hotspots_min: int = 6  # карта вдвое больше прежней — точек тоже больше
+    hotspots_max: int = 9
     sources_per_hotspot: int = 3
     source_amount_min: float = 15.0
     source_amount_max: float = 30.0
@@ -79,7 +84,9 @@ class WorldConfig:
     child_energy: float = 6.0
 
     # Зрение и сигналы.
-    view_radius: int = 5  # окно (2r+1)^2 вокруг робота
+    view_radius: int = 5  # окно (2r+1)^2 вокруг робота — вход сети; его изменение несовместимо со старыми моделями
+    # Дальность зрения: клетки окна дальше неё закрыты туманом. None — видно всё окно.
+    sight: int | None = 4
     signal_symbols: int = 8  # α, β, γ, … — смысла не несут
     signal_levels: int = 16
     signal_radius: float = 7.0
@@ -94,7 +101,9 @@ class RewardConfig:
     left_behind: float = -5.0
     destroyed: float = -5.0
     faction_deactivated: float = -2.0
-    timeout: float = -5.0  # корабль не улетел — проиграли все, включая пассажиров
+    timeout: float = -5.0  # корабль не улетел — проиграли все, включая пассажиров; погибшим не начисляется повторно
+    # Погибший робот ждёт конца матча и получает свою долю faction_share, если союзники улетели.
+    dead_wait: bool = True
 
     # Промежуточные.
     alive: float = 0.0
@@ -178,5 +187,6 @@ class Config:
             if section not in d or name not in d[section]:
                 raise KeyError(f"неизвестный параметр: {key}")
             old = d[section][name]
-            d[section][name] = type(old)(json.loads(raw)) if not isinstance(old, str) else raw
+            value = json.loads(raw) if not isinstance(old, str) else raw
+            d[section][name] = value if old is None or value is None else type(old)(value)
         return Config.from_dict(d)

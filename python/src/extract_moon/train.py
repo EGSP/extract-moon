@@ -22,6 +22,24 @@ from .model import Policy, distributions, joint_logprob_entropy, pick_device
 from .paths import RUNS_DIR
 
 
+# Средние по последним матчам, которые пишутся в metrics.csv: (колонка, знаков после запятой).
+EP_FIELDS = [("launch_rate", 3), ("ep_length", 1), ("charge_frac", 3), ("passengers", 2), ("kills", 2),
+             ("births", 2), ("upgrades", 2), ("signals", 1), ("gives", 2), ("leaves", 2),
+             ("pop_mean", 2), ("pop_min", 2), ("pop_max", 2)] + [(f"sig_{i}", 1) for i in range(1, 17)]
+
+
+def episode_value(ep: dict, key: str) -> float:
+    if key == "launch_rate":
+        return ep["launched"]
+    if key == "ep_length":
+        return ep["length"]
+    if key.startswith("sig_"):
+        by_sym = ep.get("signals_by_symbol") or []
+        i = int(key[4:]) - 1
+        return by_sym[i] if i < len(by_sym) else 0
+    return ep.get(key, 0)
+
+
 def to_torch(obs: dict, device) -> dict:
     out = {}
     for k, v in obs.items():
@@ -181,23 +199,11 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
                **{k: round(v, 5) for k, v in stats.items()}}
         if recent:
             eps = list(recent)
-            row.update({
-                "episodes": len(eps),
-                "launch_rate": round(np.mean([e["launched"] for e in eps]), 3),
-                "ep_length": round(np.mean([e["length"] for e in eps]), 1),
-                "charge_frac": round(np.mean([e["charge_frac"] for e in eps]), 3),
-                "passengers": round(np.mean([e["passengers"] for e in eps]), 2),
-                "kills": round(np.mean([e["kills"] for e in eps]), 2),
-                "births": round(np.mean([e["births"] for e in eps]), 2),
-                "upgrades": round(np.mean([e["upgrades"] for e in eps]), 2),
-                "signals": round(np.mean([e["signals"] for e in eps]), 1),
-                "gives": round(np.mean([e["gives"] for e in eps]), 2),
-                "leaves": round(np.mean([e["leaves"] for e in eps]), 2),
-            })
+            row["episodes"] = len(eps)
+            for key, digits in EP_FIELDS:
+                row[key] = round(float(np.mean([episode_value(e, key) for e in eps])), digits)
         if writer is None:
-            fields = list(row.keys()) + [k for k in ("episodes", "launch_rate", "ep_length", "charge_frac",
-                                                     "passengers", "kills", "births", "upgrades", "signals",
-                                                     "gives", "leaves") if k not in row]
+            fields = list(row.keys()) + [k for k in ["episodes"] + [k for k, _ in EP_FIELDS] if k not in row]
             writer = csv.DictWriter(metrics_file, fieldnames=fields)
             if metrics_path.stat().st_size == 0:
                 writer.writeheader()

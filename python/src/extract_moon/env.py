@@ -5,7 +5,9 @@
 (E, R, ...), где E — число параллельных матчей, R — число слотов под роботов.
 
 Слот робота — это «поток» для обучения: он начинается при появлении робота
-(старт матча или рождение) и заканчивается смертью или концом матча.
+(старт матча или рождение) и заканчивается концом матча. Погибший робот
+(при reward.dead_wait) остаётся в потоке без решений до конца матча, чтобы
+получить долю награды за улетевших союзников.
 """
 
 from __future__ import annotations
@@ -17,8 +19,8 @@ import numpy as np
 from .config import Config
 
 # Состояния слота.
-EMPTY, AWAKE, ASLEEP, BOARDED = 0, 1, 2, 3
-STATUS_NAMES = {EMPTY: "empty", AWAKE: "awake", ASLEEP: "asleep", BOARDED: "boarded"}
+EMPTY, AWAKE, ASLEEP, BOARDED, DEAD = 0, 1, 2, 3, 4
+STATUS_NAMES = {EMPTY: "empty", AWAKE: "awake", ASLEEP: "asleep", BOARDED: "boarded", DEAD: "dead"}
 
 # Основное действие.
 NOOP, UP, DOWN, LEFT, RIGHT, HARVEST, DEPOSIT, BOARD, GIVE, ATTACK, REPRODUCE, LEAVE = range(12)
@@ -48,6 +50,10 @@ class ExtractMoonEnv:
         self.E, self.R, self.S = num_envs, w.max_robots, w.map_max
         self.P = w.view_radius
         self.K = 2 * self.P + 1
+        self.sight = self.P if w.sight is None else min(w.sight, self.P)
+        # Туман внутри окна обзора: клетки дальше sight (по Чебышёву) не видны.
+        d = np.abs(np.arange(self.K) - self.P)
+        self.fog = (np.maximum(d[:, None], d[None, :]) <= self.sight).astype(np.float32)
         self.Fm = w.factions_max
         self.n_symbols = w.signal_symbols + 1  # 0 — молчание
         self.n_levels = w.signal_levels
@@ -98,7 +104,8 @@ class ExtractMoonEnv:
     @staticmethod
     def _empty_stats() -> dict:
         return {"deposited": 0.0, "kills": 0, "births": 0, "upgrades": 0, "signals": 0,
-                "gives": 0, "rescues": 0, "leaves": 0, "attacks": 0}
+                "gives": 0, "rescues": 0, "leaves": 0, "attacks": 0,
+                "pop_sum": 0, "pop_min": None, "pop_max": 0, "signals_by_symbol": None}
 
     def _reset_env(self, e: int) -> None:
         w, rng = self.w, self.map_rng
@@ -238,7 +245,7 @@ class ExtractMoonEnv:
         other_sl[:, :, P, P] -= (asleep & loner)
         counts = np.minimum(np.stack([ally_aw, ally_sl, other_aw, other_sl], 2), 3) / 3
         grid = np.concatenate([patch[:, :, :3], counts], axis=2).astype(np.float32)
-        grid *= (st != EMPTY)[:, :, None, None, None]
+        grid *= (st != EMPTY)[:, :, None, None, None] * self.fog
 
         # Векторные признаки.
         cap = self.energy_cap()
@@ -272,7 +279,7 @@ class ExtractMoonEnv:
         sym = self.sig_sym[ar_e[:, None, None], idx]
         val = self.sig_val[ar_e[:, None, None], idx] / max(self.n_levels - 1, 1)
         # Свой или чужой — понятно, только если отправитель в поле зрения.
-        visible = np.take_along_axis(cheb, idx, -1) <= P
+        visible = np.take_along_axis(cheb, idx, -1) <= self.sight
         is_ally = np.take_along_axis(ally, idx, -1)
         sig = np.concatenate([
             dxy, np.eye(self.n_symbols, dtype=np.float32)[sym], val[..., None],
@@ -424,10 +431,15 @@ class ExtractMoonEnv:
         # Смерть от атак.
         dead = on_map & (self.hp <= 0) & (self.status != BOARDED)
         rew += dead * rw.destroyed
-        done |= dead
         killer = at & dead[ar_e, atgt]
         rew += killer * rw.kills
-        self.status[dead] = EMPTY
+        if rw.dead_wait:
+            self.status[dead] = DEAD
+            self.hp[dead] = 0
+            self.energy[dead] = 0
+        else:
+            done |= dead
+            self.status[dead] = EMPTY
 
         # Размножение (редкое действие, поэтому цикл).
         births = np.zeros((E, R), bool)
@@ -465,7 +477,7 @@ class ExtractMoonEnv:
             self.deactivated[:, f] |= off
 
         # Видимость корабля.
-        seen = ((st == AWAKE) | (st == ASLEEP)) & (self._ship_dist() <= self.P)
+        seen = ((st == AWAKE) | (st == ASLEEP)) & (self._ship_dist() <= self.sight)
         self.seen_ago = np.where(seen, 0, np.minimum(self.seen_ago + 1, NEVER_SEEN))
         self.seen_charge = np.where(seen, (self.ship_charge / self.ship_cap)[:, None], self.seen_charge)
         left = (self.seats - self.passengers) / np.maximum(self.seats, 1)
@@ -485,6 +497,12 @@ class ExtractMoonEnv:
             s["rescues"] += int(woke[e].sum())
             s["leaves"] += int(lv[e].sum())
             s["attacks"] += int(at[e].sum())
+            pop = int(np.isin(st[e], (AWAKE, ASLEEP, BOARDED)).sum())
+            s["pop_sum"] += pop
+            s["pop_min"] = pop if s["pop_min"] is None else min(s["pop_min"], pop)
+            s["pop_max"] = max(s["pop_max"], pop)
+            by_sym = np.bincount(sym[e][emit[e]], minlength=self.n_symbols)[1:]
+            s["signals_by_symbol"] = by_sym if s["signals_by_symbol"] is None else s["signals_by_symbol"] + by_sym
             ev = self.events[e]
             for r in np.nonzero(emit[e])[0]:
                 ev.append({"type": "signal", "src": int(self.uid[e, r]), "sym": int(sym[e, r]), "val": int(val[e, r]),
@@ -507,16 +525,22 @@ class ExtractMoonEnv:
 
         finished = []
         for e in np.nonzero(launch | timeout)[0]:
-            alive = st[e] != EMPTY
+            in_play = st[e] != EMPTY
+            alive = in_play & (st[e] != DEAD)  # погибшие своё наказание уже получили
             if launch[e]:
                 share = np.zeros(self.R, np.float32)
                 fm = self.faction[e] >= 0
                 share[fm] = self.passenger_faction[e, self.faction[e, fm]] / self.seats[e]
-                rew[e] += alive * (np.where(st[e] == BOARDED, rw.escape, rw.left_behind) + rw.faction_share * share)
+                rew[e] += alive * np.where(st[e] == BOARDED, rw.escape, rw.left_behind) + in_play * rw.faction_share * share
             else:
                 rew[e] += alive * rw.timeout
-            done[e] |= alive
+            done[e] |= in_play
             info = dict(self.ep_stats[e])
+            ticks = max(int(self.t[e]), 1)
+            info["pop_mean"] = info.pop("pop_sum") / ticks
+            info["pop_min"] = info["pop_min"] or 0
+            by_sym = info["signals_by_symbol"]
+            info["signals_by_symbol"] = [0] * (self.n_symbols - 1) if by_sym is None else by_sym.tolist()
             info.update({
                 "launched": bool(launch[e]), "length": int(self.t[e]), "passengers": int(self.passengers[e]),
                 "seats": int(self.seats[e]), "factions": int(self.n_factions[e]),
@@ -542,7 +566,7 @@ class ExtractMoonEnv:
 
     def snapshot(self, e: int) -> dict:
         robots = []
-        for r in np.nonzero(self.status[e] != EMPTY)[0]:
+        for r in np.nonzero((self.status[e] != EMPTY) & (self.status[e] != DEAD))[0]:
             robots.append({
                 "id": int(self.uid[e, r]), "slot": int(r),
                 "x": int(self.pos[e, r, 0]), "y": int(self.pos[e, r, 1]),
@@ -564,4 +588,4 @@ class ExtractMoonEnv:
         }
 
     def map_info(self, e: int) -> dict:
-        return {"size": int(self.size[e]), "factions": int(self.n_factions[e])}
+        return {"size": int(self.size[e]), "factions": int(self.n_factions[e]), "sight": int(self.sight)}

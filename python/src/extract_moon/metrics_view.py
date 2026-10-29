@@ -13,20 +13,36 @@ from pathlib import Path
 
 from .paths import RUNS_DIR
 
+SYMBOLS = "αβγδεζηθικλμνξοπ"
+
+# (заголовок, пояснение, [(колонка, подпись линии)]). Всё «за матч» — среднее по последним 200 матчам.
 PANELS = [
-    ("reward_per_step", "Награда за такт"),
-    ("launch_rate", "Доля улетевших кораблей"),
-    ("charge_frac", "Заряд корабля к концу матча"),
-    ("passengers", "Пассажиров за матч"),
-    ("ep_length", "Длина матча, тактов"),
-    ("kills", "Убийств за матч"),
-    ("signals", "Сигналов за матч"),
-    ("births", "Рождений за матч"),
-    ("gives", "Передач энергии за матч"),
-    ("entropy", "Энтропия политики"),
-    ("value_loss", "Ошибка критика"),
-    ("approx_kl", "KL между политиками"),
+    ("Средняя награда робота за такт", "все награды и штрафы ÷ такты роботов", [("reward_per_step", None)]),
+    ("Матчи, где корабль улетел", "доля от последних 200 матчей, 1 = всегда", [("launch_rate", None)]),
+    ("Заряд корабля к концу матча", "доля от нужной энергии, 1 = полностью", [("charge_frac", None)]),
+    ("Пассажиров в корабле", "сколько роботов улетело за матч", [("passengers", None)]),
+    ("Длина матча, тактов", "короче — корабль заряжают быстрее", [("ep_length", None)]),
+    ("Роботов в матче", "живых, включая пассажиров", [("pop_max", "макс."), ("pop_mean", "среднее"), ("pop_min", "мин.")]),
+    ("Убийств за матч", "", [("kills", None)]),
+    ("Рождений за матч", "", [("births", None)]),
+    ("Передач энергии за матч", "робот отдаёт энергию союзнику", [("gives", None)]),
+    ("Случайность решений", "энтропия: выше — сеть чаще выбирает наугад", [("entropy", None)]),
+    ("Ошибка прогноза награды", "сеть предсказывает свою награду — это её ошибка", [("value_loss", None)]),
+    ("Изменение сети за обновление", "KL: сдвиг вероятностей действий", [("approx_kl", None)]),
 ]
+
+
+def signal_panels(n: int) -> list:
+    return [(f"Сигнал {SYMBOLS[i]} за матч", "сколько раз подан",
+             [(f"sig_{i + 1}", None)]) for i in range(n)]
+
+
+def n_symbols(names: list[str]) -> int:
+    for name in names:
+        cfg = run_dir(name) / "config.json"
+        if cfg.exists():
+            return json.loads(cfg.read_text(encoding="utf-8"))["world"]["signal_symbols"]
+    return 8
 
 
 def run_dir(name: str) -> Path:
@@ -74,37 +90,49 @@ def summary(name: str, rows: list[dict]) -> str:
     text = f"{d.name}: обновление {upd}" + (f"/{total}" if total else "")
     text += f", {int(last['steps']):,} робот-тактов, {last['sps']} такт/с".replace(",", " ")
     recent = [r for r in rows[-20:] if r.get("time")]
-    if len(recent) > 1 and total:
+    if len(recent) > 1 and total and upd < total:
         per_update = (float(recent[-1]["time"]) - float(recent[0]["time"])) / (
             int(recent[-1]["update"]) - int(recent[0]["update"]))
         text += f", осталось ≈ {per_update * (total - upd) / 60:.0f} мин"
     ago = time.time() - (d / "metrics.csv").stat().st_mtime
-    if ago > 120:
+    if ago > 120 and total and upd < total:
         text += f", последняя запись {ago / 60:.0f} мин назад"
+    elif total and upd >= total:
+        text += ", завершено"
     return text
 
 
 def draw(fig, names: list[str]) -> None:
     fig.clf()
-    axes = fig.subplots(3, 4)
+    panels = PANELS + signal_panels(n_symbols(names))
+    cols = 5
+    axes = fig.subplots((len(panels) + cols - 1) // cols, cols, squeeze=False).flatten().tolist()
     lines = []
     for i, name in enumerate(names):
         rows = load_metrics(name)
         lines.append(summary(name, rows))
-        color = f"C{i}"
-        for ax, (key, title) in zip(axes.flat, PANELS):
-            xs, ys = series(rows, key)
-            if xs:
-                if len(names) == 1:
+        for ax, (_, _, keys) in zip(axes, panels):
+            for j, (key, label) in enumerate(keys):
+                xs, ys = series(rows, key)
+                if not xs:
+                    continue
+                color = f"C{i}" if len(names) > 1 else f"C{j}"
+                if len(names) == 1 and len(keys) == 1:
                     ax.plot(xs, ys, color=color, alpha=0.25, lw=0.8)
-                ax.plot(xs, ema(ys), color=color, lw=1.6, label=run_dir(name).name)
-    for ax, (_, title) in zip(axes.flat, PANELS):
-        ax.set_title(title, fontsize=10)
+                tag = run_dir(name).name if len(names) > 1 else label
+                ax.plot(xs, ema(ys), color=color, lw=1.6, label=tag, ls="-" if len(names) == 1 else ["-", "--", ":"][j % 3])
+    for ax, (title, note, keys) in zip(axes, panels):
+        ax.set_title(title + (f"\n{note}" if note else ""), fontsize=9)
         ax.grid(alpha=0.3)
-        ax.tick_params(labelsize=8)
+        ax.tick_params(labelsize=7)
         ax.xaxis.get_offset_text().set_fontsize(7)
+        if len(keys) > 1 and ax.lines and len(names) == 1:
+            ax.legend(fontsize=7)
+    for ax in axes[len(panels):]:
+        ax.set_visible(False)
     if len(names) > 1:
-        axes.flat[0].legend(fontsize=8)
+        axes[0].legend(fontsize=8)
+    fig.supxlabel("робот-тактов опыта", fontsize=9)
     fig.suptitle("\n".join(lines), fontsize=10)
     fig.tight_layout()
 
@@ -115,7 +143,7 @@ def plot(names: list[str], out: Path | None = None) -> Path:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig = plt.figure(figsize=(18, 10))
+    fig = plt.figure(figsize=(19, 11))
     draw(fig, names)
     out = out or (run_dir(names[0]) / "metrics.png")
     fig.savefig(out, dpi=100)
@@ -127,7 +155,7 @@ def watch(names: list[str], interval: float = 5.0) -> None:
     import matplotlib.pyplot as plt
 
     plt.ion()
-    fig = plt.figure(figsize=(18, 10))
+    fig = plt.figure(figsize=(19, 11))
     fig.canvas.manager.set_window_title("Extract Moon — обучение")
     stamp = None
     while plt.fignum_exists(fig.number):

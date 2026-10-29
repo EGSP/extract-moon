@@ -1,7 +1,7 @@
 import numpy as np
 
 from extract_moon.config import Config
-from extract_moon.env import ASLEEP, AWAKE, BOARDED, EMPTY, GRID_CHANNELS, N_MAIN, N_UPGRADE, ExtractMoonEnv
+from extract_moon.env import ASLEEP, AWAKE, BOARDED, DEAD, EMPTY, GRID_CHANNELS, N_MAIN, N_UPGRADE, ExtractMoonEnv
 
 
 def random_actions(env, obs, rng):
@@ -76,3 +76,46 @@ def test_deposit_and_launch():
     assert info["episodes"] and info["episodes"][0]["launched"]
     assert info["episodes"][0]["passengers"] == min(len(alive), env.seats[0])
     assert done[0, alive].all()
+
+
+def test_fog_hides_cells_beyond_sight():
+    cfg = Config()
+    env = ExtractMoonEnv(cfg, 2, seed=4)
+    obs = env.observe()
+    P, s = cfg.world.view_radius, cfg.world.sight
+    assert s < P
+    assert (obs["grid"][:, :, :, 0, :] == 0).all() and (obs["grid"][:, :, :, :, P + s + 1:] == 0).all()
+
+
+def test_dead_robot_waits_and_gets_faction_share():
+    """Погибший робот не выбывает сразу и в конце матча получает долю за улетевших союзников."""
+    cfg = Config()
+    cfg.world.ship_capacity_min = cfg.world.ship_capacity_max = 4.0
+    env = ExtractMoonEnv(cfg, 1, seed=5)
+    fac0 = np.nonzero((env.status[0] == AWAKE) & (env.faction[0] == 0))[0]
+    victim, others = fac0[0], fac0[1:]
+    env.hp[0, victim] = 0.1
+    enemy = np.nonzero(env.faction[0] == 1)[0][0]
+    env.pos[0, enemy] = env.pos[0, victim]
+    env.observe()
+    z = np.zeros((1, env.R), np.int64)
+    main = z.copy()
+    main[0, enemy] = 9  # ATTACK
+    rew, done, _ = env.step(main, z, z, z)
+    assert env.status[0, victim] == DEAD and not done[0, victim]
+    assert rew[0, victim] == cfg.reward.destroyed
+    obs = env.observe()
+    assert obs["active"][0, victim] and not obs["acting"][0, victim]
+    env.seats[0] = len(others)  # все места заняты — корабль улетает сразу
+    env.pos[0, others] = env.ship_pos[0]
+    env.energy[0, others] = 10
+    env.observe()
+    main = z.copy()
+    main[0, others] = 6  # DEPOSIT
+    env.step(main, z, z, z)
+    env.observe()
+    main = z.copy()
+    main[0, others] = 7  # BOARD
+    rew, done, info = env.step(main, z, z, z)
+    assert info["episodes"][0]["launched"] and done[0, victim]
+    assert rew[0, victim] > 0
