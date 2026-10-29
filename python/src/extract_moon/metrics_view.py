@@ -32,9 +32,19 @@ PANELS = [
 ]
 
 
-def signal_panels(n: int) -> list:
-    return [(f"Сигнал {SYMBOLS[i]} за матч", "сколько раз подан",
-             [(f"sig_{i + 1}", None)]) for i in range(n)]
+def signal_panel(n: int) -> tuple:
+    """Все символы на одном графике: у каждого своя линия."""
+    return ("Сигналов за матч по символам", "сколько раз подан каждый символ",
+            [(f"sig_{i + 1}", SYMBOLS[i]) for i in range(n)])
+
+
+def line_style(i_run: int, j_key: int, n_runs: int, n_keys: int) -> tuple[str, str]:
+    """Цвет и тип линии. На графике с многими линиями цвет — линия, тип — запуск."""
+    if n_keys > 3:
+        return f"C{j_key % 10}", ["-", "--", ":", "-."][(i_run + j_key // 10) % 4]
+    if n_runs > 1:
+        return f"C{i_run}", ["-", "--", ":"][j_key % 3]
+    return f"C{j_key}", "-"
 
 
 def n_symbols(names: list[str]) -> int:
@@ -104,7 +114,7 @@ def summary(name: str, rows: list[dict]) -> str:
 
 def draw(fig, names: list[str]) -> None:
     fig.clf()
-    panels = PANELS + signal_panels(n_symbols(names))
+    panels = PANELS + [signal_panel(n_symbols(names))]
     cols = 5
     axes = fig.subplots((len(panels) + cols - 1) // cols, cols, squeeze=False).flatten().tolist()
     lines = []
@@ -116,17 +126,24 @@ def draw(fig, names: list[str]) -> None:
                 xs, ys = series(rows, key)
                 if not xs:
                     continue
-                color = f"C{i}" if len(names) > 1 else f"C{j}"
+                color, ls = line_style(i, j, len(names), len(keys))
                 if len(names) == 1 and len(keys) == 1:
                     ax.plot(xs, ys, color=color, alpha=0.25, lw=0.8)
-                tag = run_dir(name).name if len(names) > 1 else label
-                ax.plot(xs, ema(ys), color=color, lw=1.6, label=tag, ls="-" if len(names) == 1 else ["-", "--", ":"][j % 3])
+                if len(keys) > 3:
+                    tag = label if i == 0 else None  # типы линий запусков подписаны на первом графике
+                else:
+                    tag = run_dir(name).name if len(names) > 1 else label
+                ax.plot(xs, ema(ys), color=color, lw=1.4, label=tag, ls=ls)
     for ax, (title, note, keys) in zip(axes, panels):
+        if len(keys) > 3 and len(names) > 1:
+            note = ", ".join(f"{['—', '--', '··', '-·'][i % 4]} {run_dir(n).name}" for i, n in enumerate(names))
         ax.set_title(title + (f"\n{note}" if note else ""), fontsize=9)
         ax.grid(alpha=0.3)
         ax.tick_params(labelsize=7)
         ax.xaxis.get_offset_text().set_fontsize(7)
-        if len(keys) > 1 and ax.lines and len(names) == 1:
+        if len(keys) > 3 and ax.lines:
+            ax.legend(fontsize=7, ncol=2 if len(keys) <= 8 else 4, handlelength=1.5, columnspacing=0.8)
+        elif len(keys) > 1 and ax.lines and len(names) == 1:
             ax.legend(fontsize=7)
     for ax in axes[len(panels):]:
         ax.set_visible(False)
