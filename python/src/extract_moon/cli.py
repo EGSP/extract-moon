@@ -71,6 +71,8 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--seed", type=int, default=0, help="seed карты")
     r.add_argument("--out", type=Path, default=None)
     r.add_argument("--greedy", action="store_true", help="выбирать самое вероятное действие")
+    r.add_argument("--device", default="auto", help="cpu, cuda или auto")
+    r.add_argument("--view", action="store_true", help="открыть записанный матч в проигрывателе")
 
     w = sub.add_parser("watch", help="живые графики обучения (одного или нескольких запусков)")
     w.add_argument("runs", nargs="+", help="имена запусков в data/runs или пути к ним")
@@ -110,9 +112,13 @@ def main(argv: list[str] | None = None) -> None:
         ck = resolve_checkpoint(a.checkpoint)
         tag = ck.parent.parent.name + "_" + ck.stem if ck else "untrained"
         out = a.out or REPLAYS_DIR / f"{tag}_seed{a.seed}.jsonl.gz"
-        res = record_episode(out, ck, a.seed, greedy=a.greedy)
+        res = record_episode(out, ck, a.seed, device=a.device, greedy=a.greedy)
         print(f"реплей: {out}")
         print(json.dumps(res, ensure_ascii=False))
+        if a.view:
+            from .viewer import run_viewer
+
+            run_viewer(out)
     elif a.cmd == "view":
         from .viewer import run_viewer
 
