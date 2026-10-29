@@ -161,13 +161,14 @@ class Renderer:
                 pg.draw.line(surf, EVENT_COLORS[ev["type"]], a, centers[ev["dst"]], 3)
             elif ev["type"] == "deposit" and a:
                 pg.draw.line(surf, EVENT_COLORS["deposit"], a, ship_c, 2)
-            elif ev["type"] == "signal":
-                p = ((ev["x"] + 0.5) * c, (ev["y"] + 0.5) * c)
-                pg.draw.circle(overlay, (200, 200, 255, 40), p, int(self.signal_radius * c), 2)
-                label = self.names["symbols"][ev["sym"]] + str(ev["val"])
-                surf.blit(self.small.render(label, True, (210, 210, 255)), (p[0] + 6, p[1] - c * 0.75))
             elif ev["type"] == "birth" and ev.get("dst") in centers:
                 pg.draw.circle(surf, (255, 255, 255), centers[ev["dst"]], int(c * 0.45), 2)
+        # Сигнал ярче всего на своём такте: проявляется на пути к нему и затухает после.
+        signals = [(ev, 1 - alpha, False) for ev in fr["events"] if ev["type"] == "signal"]
+        if alpha > 0 and idx + 1 < len(self.frames):
+            signals += [(ev, alpha, True) for ev in self.frames[idx + 1]["events"] if ev["type"] == "signal"]
+        for ev, k, growing in signals:
+            self.draw_signal(surf, overlay, ev, k, growing)
         surf.blit(overlay, (0, 0))
 
         r = max(int(c * 0.26), 4)
@@ -199,6 +200,19 @@ class Renderer:
         self.draw_panel(surf, fr, idx, selected)
         if self.controls:
             self.draw_toolbar(surf, idx, playing, speed, vision, stage, mouse, smooth)
+
+    def draw_signal(self, surf, overlay, ev, k: float, growing: bool):
+        """k — яркость от 0 до 1; проявляясь, круг расходится до радиуса слышимости."""
+        if k <= 0.02:
+            return
+        c = self.cell
+        p = ((ev["x"] + 0.5) * c, (ev["y"] + 0.5) * c)
+        radius = self.signal_radius * c * ((0.4 + 0.6 * k) if growing else 1)
+        pg_alpha = int(255 * k)
+        self.pg.draw.circle(overlay, (200, 200, 255, int(40 * k)), p, int(radius), 2)
+        img = self.small.render(self.names["symbols"][ev["sym"]] + str(ev["val"]), True, (210, 210, 255))
+        img.set_alpha(pg_alpha)
+        surf.blit(img, (p[0] + 6, p[1] - c * 0.75))
 
     def draw_panel(self, surf, fr, idx, selected):
         pg = self.pg
