@@ -1,0 +1,20 @@
+# Python
+python/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Данные: запуски, чекпойнты и реплеи не коммитим, структуру папок — да
+data/runs/*
+!data/runs/.gitkeep
+data/replays/*
+!data/replays/.gitkeep
+
+# Godot
+godot/.godot/
+godot/export/
+
+# Прочее
+.vscode/
+.idea/
+Thumbs.db

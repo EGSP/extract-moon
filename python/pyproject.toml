@@ -1,0 +1,41 @@
+[project]
+name = "extract-moon"
+version = "0.1.0"
+description = "Песочница RL: фракции роботов заряжают корабль и борются за места. Мозг — RWKV."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Драйвер NVIDIA 472.12 (CUDA 11.4) обновлять нельзя. Сборки CUDA 11.8 работают
+    # на нём благодаря minor version compatibility; 2.7.x — последняя ветка torch с cu118.
+    "torch==2.7.1",
+    "numpy>=2.0,<2.3",
+    "pygame-ce>=2.5,<2.6",
+    "pillow>=11.0",
+    "matplotlib>=3.9,<3.11",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu118" }
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[project.scripts]
+extract-moon = "extract_moon.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/extract_moon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

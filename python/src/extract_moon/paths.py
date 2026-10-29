@@ -1,0 +1,8 @@
+"""Пути проекта: данные лежат в extract_moon/data, рядом с папкой python."""
+
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DATA_DIR = PROJECT_ROOT / "data"
+RUNS_DIR = DATA_DIR / "runs"
+REPLAYS_DIR = DATA_DIR / "replays"
