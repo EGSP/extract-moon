@@ -78,7 +78,7 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
     ck_dir.mkdir(parents=True, exist_ok=True)
     cfg.save(run_dir / "config.json")
 
-    env = ExtractMoonEnv(cfg, tc.num_envs, seed=tc.seed)
+    env = ExtractMoonEnv(cfg, tc.num_envs, seed=tc.seed, record_events=False)
     E, R, T = env.E, env.R, tc.rollout_len
     B = E * R
     model = Policy(cfg, env.vec_dim).to(device)
@@ -95,6 +95,13 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
     print(f"устройство: {device}, параметров: {n_params / 1e6:.2f} млн, потоков: {B}, запуск: {run_dir}")
 
     metrics_path = run_dir / "metrics.csv"
+    if metrics_path.exists():
+        # Продолжение с чекпойнта: строки после него остались от прерванной сессии и будут пересчитаны.
+        with metrics_path.open(encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        if rows and any(int(r[0]) > start_update for r in rows[1:]):
+            with metrics_path.open("w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerows([rows[0]] + [r for r in rows[1:] if int(r[0]) <= start_update])
     metrics_file = metrics_path.open("a", newline="", encoding="utf-8")
     writer = None
     recent = deque(maxlen=200)
@@ -158,13 +165,13 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
         model.train()
         stats = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "clip_frac": 0.0, "approx_kl": 0.0}
         n_mb = 0
-        mb_size = min(tc.minibatch_streams, B)
+        # Пустые слоты матча ничего не дают в потерях, поэтому учимся только на потоках, где робот
+        # был хоть один такт. Число минибатчей прежнее, как если бы делили все B потоков.
+        live = data["active"].any(0).nonzero().squeeze(1)
+        n_split = -(-B // min(tc.minibatch_streams, B))
         for _ in range(tc.epochs):
-            perm = torch.randperm(B, device=device)
-            for i in range(0, B, mb_size):
-                idx = perm[i:i + mb_size]
-                if data["active"][:, idx].sum() == 0:
-                    continue
+            perm = live[torch.randperm(len(live), device=device)]
+            for idx in perm.chunk(n_split):
                 sub = {k: v[:, idx] for k, v in data.items()}
                 out = model.sequence(sub["grid"], sub["vec"], init_state[idx], sub["new_slot"])
                 dists = distributions(out, sub["main_mask"], sub["upg_mask"])

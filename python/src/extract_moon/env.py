@@ -40,11 +40,15 @@ N_UPGRADE = len(UPGRADE_NAMES)
 LONER = -1  # фракция одиночки: союзников у него нет
 GRID_CHANNELS = ["out_of_map", "source", "ship", "ally_awake", "ally_asleep", "other_awake", "other_asleep"]
 NEVER_SEEN = 999
+STAT_KEYS = ("deposited", "kills", "passenger_kills", "births", "upgrades", "signals", "gives", "rescues",
+             "leaves", "attacks")
 
 
 class ExtractMoonEnv:
-    def __init__(self, cfg: Config, num_envs: int, seed: int = 0):
+    def __init__(self, cfg: Config, num_envs: int, seed: int = 0, record_events: bool = True):
         self.cfg = cfg
+        # События нужны только реплеям; при обучении их сборка заметно замедляет такт.
+        self.record_events = record_events
         w = self.w = cfg.world
         self.rw = cfg.reward
         self.E, self.R, self.S = num_envs, w.max_robots, w.map_max
@@ -94,18 +98,24 @@ class ExtractMoonEnv:
         self.sig_val = np.zeros((E, R), np.int64)
         self.sig_pos = np.zeros((E, R, 2), np.int64)
 
-        self.ep_stats = [self._empty_stats() for _ in range(E)]
+        # Статистика матча: счётчики STAT_KEYS, численность, сигналы по символам — по всем матчам сразу.
+        self.stat = np.zeros((E, len(STAT_KEYS)))
+        self.pop_sum = np.zeros(E, np.int64)
+        self.pop_min = np.zeros(E, np.int64)
+        self.pop_max = np.zeros(E, np.int64)
+        self.sig_count = np.zeros((E, self.n_symbols - 1), np.int64)
         self.events: list[list[dict]] = [[] for _ in range(E)]
         for e in range(E):
             self._reset_env(e)
 
     # ------------------------------------------------------------------ сброс
 
-    @staticmethod
-    def _empty_stats() -> dict:
-        return {"deposited": 0.0, "kills": 0, "passenger_kills": 0, "births": 0, "upgrades": 0, "signals": 0,
-                "gives": 0, "rescues": 0, "leaves": 0, "attacks": 0,
-                "pop_sum": 0, "pop_min": None, "pop_max": 0, "signals_by_symbol": None}
+    def episode_stats(self, e: int) -> dict:
+        ticks = max(int(self.t[e]), 1)
+        out = {k: (float(v) if k == "deposited" else int(v)) for k, v in zip(STAT_KEYS, self.stat[e])}
+        out.update({"pop_mean": self.pop_sum[e] / ticks, "pop_min": int(self.pop_min[e]) if self.t[e] else 0,
+                    "pop_max": int(self.pop_max[e]), "signals_by_symbol": self.sig_count[e].tolist()})
+        return out
 
     def _reset_env(self, e: int) -> None:
         w, rng = self.w, self.map_rng
@@ -158,7 +168,10 @@ class ExtractMoonEnv:
                     break
                 self._spawn(e, slot, clip(capsules[f] + rng.integers(-1, 2, 2)), f, w.energy_start)
                 slot += 1
-        self.ep_stats[e] = self._empty_stats()
+        self.stat[e] = 0
+        self.pop_sum[e] = self.pop_max[e] = 0
+        self.pop_min[e] = np.iinfo(np.int64).max
+        self.sig_count[e] = 0
 
     def _spawn(self, e: int, r: int, pos, faction: int, energy: float) -> None:
         self.status[e, r] = AWAKE
@@ -467,7 +480,8 @@ class ExtractMoonEnv:
             self.energy[e, r] -= w.reproduce_cost
             self._spawn(e, c, self.pos[e, r].copy(), int(self.faction[e, r]), w.child_energy)
             births[e, r] = True
-            self.events[e].append({"type": "birth", "src": int(self.uid[e, r]), "dst": int(self.uid[e, c])})
+            if self.record_events:
+                self.events[e].append({"type": "birth", "src": int(self.uid[e, r]), "dst": int(self.uid[e, c])})
         rew += births * rw.spawned
 
         # Сон и пробуждение.
@@ -501,35 +515,29 @@ class ExtractMoonEnv:
         self.prev_action = main.copy()
         self.t += 1
 
-        # Статистика и события для реплеев.
-        for e in range(E):
-            s = self.ep_stats[e]
-            s["deposited"] += float(amt[e].sum())
-            s["kills"] += int(dead[e].sum())
-            s["passenger_kills"] += int(pd[e].sum())
-            s["births"] += int(births[e].sum())
-            s["upgrades"] += int(up[e].sum())
-            s["signals"] += int(emit[e].sum())
-            s["gives"] += int(gv[e].sum())
-            s["rescues"] += int(woke[e].sum())
-            s["leaves"] += int(lv[e].sum())
-            s["attacks"] += int(at[e].sum())
-            pop = int(np.isin(st[e], (AWAKE, ASLEEP, BOARDED)).sum())
-            s["pop_sum"] += pop
-            s["pop_min"] = pop if s["pop_min"] is None else min(s["pop_min"], pop)
-            s["pop_max"] = max(s["pop_max"], pop)
-            by_sym = np.bincount(sym[e][emit[e]], minlength=self.n_symbols)[1:]
-            s["signals_by_symbol"] = by_sym if s["signals_by_symbol"] is None else s["signals_by_symbol"] + by_sym
-            ev = self.events[e]
-            for r in np.nonzero(emit[e])[0]:
-                ev.append({"type": "signal", "src": int(self.uid[e, r]), "sym": int(sym[e, r]), "val": int(val[e, r]),
-                           "x": int(self.sig_pos[e, r, 0]), "y": int(self.sig_pos[e, r, 1])})
-            for name, mask in (("deposit", dp), ("board", bd), ("leave", lv), ("death", dead), ("sleep", fell),
-                               ("wake", woke)):
-                for r in np.nonzero(mask[e])[0]:
-                    ev.append({"type": name, "src": int(self.uid[e, r])})
-            for r in np.nonzero(up[e])[0]:
-                ev.append({"type": "upgrade", "src": int(self.uid[e, r]), "what": UPGRADE_NAMES[upg[e, r]]})
+        # Статистика матча.
+        self.stat += np.stack([amt.sum(-1), dead.sum(-1), pd.sum(-1), births.sum(-1), up.sum(-1), emit.sum(-1),
+                               gv.sum(-1), woke.sum(-1), lv.sum(-1), at.sum(-1)], -1)
+        pop = ((st == AWAKE) | (st == ASLEEP) | (st == BOARDED)).sum(-1)
+        self.pop_sum += pop
+        self.pop_min = np.minimum(self.pop_min, pop)
+        self.pop_max = np.maximum(self.pop_max, pop)
+        se, sr = np.nonzero(emit)
+        np.add.at(self.sig_count, (se, sym[se, sr] - 1), 1)
+
+        # События для реплеев.
+        if self.record_events:
+            for e in range(E):
+                ev = self.events[e]
+                for r in np.nonzero(emit[e])[0]:
+                    ev.append({"type": "signal", "src": int(self.uid[e, r]), "sym": int(sym[e, r]), "val": int(val[e, r]),
+                               "x": int(self.sig_pos[e, r, 0]), "y": int(self.sig_pos[e, r, 1])})
+                for name, mask in (("deposit", dp), ("board", bd), ("leave", lv), ("death", dead), ("sleep", fell),
+                                   ("wake", woke)):
+                    for r in np.nonzero(mask[e])[0]:
+                        ev.append({"type": name, "src": int(self.uid[e, r])})
+                for r in np.nonzero(up[e])[0]:
+                    ev.append({"type": "upgrade", "src": int(self.uid[e, r]), "what": UPGRADE_NAMES[upg[e, r]]})
 
         # Корабль и конец матча.
         charged = self.ship_charge >= self.ship_cap - 1e-4
@@ -552,12 +560,7 @@ class ExtractMoonEnv:
             else:
                 rew[e] += alive * rw.timeout
             done[e] |= in_play
-            info = dict(self.ep_stats[e])
-            ticks = max(int(self.t[e]), 1)
-            info["pop_mean"] = info.pop("pop_sum") / ticks
-            info["pop_min"] = info["pop_min"] or 0
-            by_sym = info["signals_by_symbol"]
-            info["signals_by_symbol"] = [0] * (self.n_symbols - 1) if by_sym is None else by_sym.tolist()
+            info = self.episode_stats(e)
             info.update({
                 "launched": bool(launch[e]), "length": int(self.t[e]), "passengers": int(self.passengers[e]),
                 "seats": int(self.seats[e]), "factions": int(self.n_factions[e]),
@@ -565,7 +568,8 @@ class ExtractMoonEnv:
                 "passenger_faction": self.passenger_faction[e, :self.n_factions[e]].tolist(),
             })
             finished.append((e, info))
-            self.events[e].append({"type": "launch" if launch[e] else "timeout"})
+            if self.record_events:
+                self.events[e].append({"type": "launch" if launch[e] else "timeout"})
 
         info = {"episodes": [i for _, i in finished], "finished_envs": [e for e, _ in finished]}
         return rew, done, info
@@ -576,6 +580,8 @@ class ExtractMoonEnv:
             self._reset_env(e)
 
     def ep_record(self, mask: np.ndarray, tgt: np.ndarray, kind: str) -> None:
+        if not self.record_events:
+            return
         for e, r in zip(*np.nonzero(mask)):
             self.events[e].append({"type": kind, "src": int(self.uid[e, r]), "dst": int(self.uid[e, tgt[e, r]])})
 

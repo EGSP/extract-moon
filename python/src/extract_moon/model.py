@@ -55,27 +55,56 @@ class TimeMix(nn.Module):
         return self.output(r * wkv), e1 * aa + e2 * v, e1 * bb + e2, p
 
     def forward_seq(self, x, prev_x, aa, bb, pp, keep):
-        """Вся последовательность (T, B, d) сразу: проекции считаются одним вызовом,
-        в цикле по времени остаётся только поэлементная рекуррентность WKV."""
+        """Вся последовательность (T, B, d) сразу: проекции считаются одним вызовом, а WKV —
+        блоками по WKV_CHUNK тактов (см. wkv_chunk), а не поштучным циклом по тактам."""
         xx = shift(x, prev_x, keep)
         k = self.key(x * self.mix_k + xx * (1 - self.mix_k))
         v = self.value(x * self.mix_v + xx * (1 - self.mix_v))
         r = torch.sigmoid(self.receptance(x * self.mix_r + xx * (1 - self.mix_r)))
         w, u = -torch.exp(self.time_decay), self.time_first
         out = []
-        for t in range(x.shape[0]):
-            kt, vt, keep_t = k[t], v[t], keep[t]
-            aa, bb = aa * keep_t, bb * keep_t
-            pp = torch.where(keep_t > 0, pp, NEG_INF)
-            ww = u + kt
-            p = torch.maximum(pp, ww)
-            e1, e2 = torch.exp(pp - p), torch.exp(ww - p)
-            out.append((e1 * aa + e2 * vt) / (e1 * bb + e2))
-            ww = pp + w
-            p = torch.maximum(ww, kt)
-            e1, e2 = torch.exp(ww - p), torch.exp(kt - p)
-            aa, bb, pp = e1 * aa + e2 * vt, e1 * bb + e2, p
-        return self.output(r * torch.stack(out)), aa, bb, pp
+        for s in range(0, x.shape[0], WKV_CHUNK):
+            args = (k[s:s + WKV_CHUNK], v[s:s + WKV_CHUNK], keep[s:s + WKV_CHUNK], w, u, aa, bb, pp)
+            # Таблицы блока велики; при обучении их пересчитывают на обратном проходе, а не хранят.
+            if torch.is_grad_enabled():
+                o, aa, bb, pp = checkpoint(wkv_chunk, *args, use_reentrant=False)
+            else:
+                o, aa, bb, pp = wkv_chunk(*args)
+            out.append(o)
+        return self.output(r * torch.cat(out)), aa, bb, pp
+
+
+# Длина блока WKV при обучении. Память блока растёт как квадрат длины, число запусков ядер — обратно ей.
+WKV_CHUNK = 8
+
+
+def wkv_chunk(k, v, keep, w, u, aa, bb, pp):
+    """WKV для C тактов без цикла по времени. Даёт то же, что C шагов TimeMix.forward.
+
+    Числитель на такте t — сумма вкладов прошлых тактов i < t с весом exp((t-1-i)·w + k_i)
+    плюс начальное состояние с весом exp(t·w + pp); знаменатель — то же без v. Вклад
+    отсекается, если между i и t память сбрасывалась (keep = 0). Все показатели степени
+    собираются в таблицу (C+1, C, B, d) и нормируются на максимум, как в рекуррентной форме.
+    Строка C таблицы — состояние после блока.
+    """
+    C = k.shape[0]
+    t = torch.arange(C + 1, device=k.device)[:, None]
+    i = torch.arange(C, device=k.device)[None, :]
+    resets = torch.cumsum(1 - keep, 0)  # (C, B, 1): сколько сбросов было к такту
+    resets_t = torch.cat([resets, resets[-1:]], 0)
+    valid = (i < t)[:, :, None, None] & (resets_t[:, None] == resets[None])
+    past = torch.where(valid, (t - 1 - i).to(k.dtype)[:, :, None, None] * w + k[None], NEG_INF)
+    first = torch.where(resets_t == 0, t[..., None].to(k.dtype) * w + pp, NEG_INF)
+    p = torch.maximum(past.amax(1), first)
+    e_past, e_first = torch.exp(past - p[:, None]), torch.exp(first - p)
+    num = (e_past * v[None]).sum(1) + e_first * aa
+    den = e_past.sum(1) + e_first * bb
+    # Текущий такт входит в выход с бонусом u, но не в состояние.
+    cur = u + k
+    q = torch.maximum(p[:C], cur)
+    s_old, s_cur = torch.exp(p[:C] - q), torch.exp(cur - q)
+    out = (num[:C] * s_old + s_cur * v) / (den[:C] * s_old + s_cur)
+    return out, num[C], den[C], p[C]
 
 
 def shift(x, prev_x, keep):

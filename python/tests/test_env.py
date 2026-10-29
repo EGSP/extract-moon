@@ -142,7 +142,7 @@ def test_passenger_can_be_killed_and_frees_seat():
     env.step(main, z, z, z)
     assert env.status[0, victim] == DEAD
     assert env.passengers[0] == 0 and env.passenger_faction[0, 0] == 0
-    assert env.ep_stats[0]["passenger_kills"] == 1
+    assert env.episode_stats(0)["passenger_kills"] == 1
 
 
 def test_legacy_passengers_are_safe():
