@@ -24,3 +24,11 @@ def test_catalog_builds():
     for arch in cat["archs"]:
         assert arch["instance"]["total_params"] > 0
         assert all(run["arch"] == arch["id"] for run in arch["runs"])
+
+
+def test_vec_example_covers_whole_vector():
+    """Разметка сведений о роботе в примере совпадает с длиной настоящего вектора."""
+    cfg = Config()
+    inst = instantiate(load_schemas()["rwkv-grid-v1"], cfg.to_dict())
+    vec = next(b for b in inst["blocks"] if b["id"] == "obs_vec")
+    assert sum(s["size"] for s in vec["example"]["segments"]) == ExtractMoonEnv(cfg, 1).vec_dim

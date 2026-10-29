@@ -1,18 +1,21 @@
 // Справочник архитектур и карточки: весь каталог загружается одним запросом, сцена показывает выбранную архитектуру.
 import { createScene, GROUP_COLORS, shapeText, sizeText, plural } from './scene.js';
 import { icon } from './icons.js';
+import { exampleView, memoryView } from './examples.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const num = n => n.toLocaleString('ru-RU');
 const short = n => n >= 1e6 ? (n / 1e6).toFixed(2).replace('.', ',') + ' млн' : n >= 1e3 ? Math.round(n / 1e3) + ' тыс.' : String(n);
 const pct = (n, total) => (100 * n / total).toFixed(1).replace('.', ',') + ' %';
-const HINT = 'Анимация по умолчанию выключена, чтобы не нагружать процессор. Клик выбирает блок. WASD двигает камеру, Q и E опускают и поднимают, Shift ускоряет. Цифры 1, 3 и 7 на цифровом блоке дают вид спереди, сбоку и сверху, 5 переключает проекцию.';
+const HINT = 'Анимация по умолчанию выключена, чтобы не нагружать процессор. Клик выбирает блок или группу. WASD двигает камеру, Q и E опускают и поднимают, Shift ускоряет. Цифры 1, 3 и 7 на цифровом блоке дают вид спереди, сбоку и сверху, 5 переключает проекцию.';
 
-let cat = null, current = null, selectedBlock = null;
+let cat = null, current = null, selectedBlock = null, selectedGroup = null;
+const memory = new Map();  // имя запуска -> полупериоды памяти или обещание их загрузки
 const scene = createScene($('#stage'), {
   onHover: id => { $('#status').textContent = id ? blockById(id)?.title ?? '' : ''; },
   onSelect: id => selectBlock(id),
+  onSelectGroup: g => selectGroup(g),
   onCamera: ortho => setOn('#btn-proj', ortho),
 });
 
@@ -63,8 +66,8 @@ function open(kind, id) {
   const same = current?.arch === arch;
   current = { kind, arch, run, schema: schemaOf(arch.schema) };
   history.replaceState(null, '', `#${kind}=${encodeURIComponent(id)}`);
-  selectedBlock = null;
-  if (same) scene.select(null, false); else scene.show(arch.instance);
+  selectedBlock = selectedGroup = null;
+  if (same) scene.select(null, false); else scene.show(arch.instance, current.schema.groups);
   renderList();
   renderHeader();
   renderCard();
@@ -86,8 +89,32 @@ function renderHeader() {
 
 function selectBlock(id) {
   selectedBlock = id || null;
+  selectedGroup = null;
   scene.select(selectedBlock);
   renderCard();
+}
+
+function selectGroup(g) {
+  selectedGroup = g;
+  selectedBlock = null;
+  scene.selectGroup(g);
+  renderCard();
+}
+
+// Модель, по весам которой показывается память: выбранный запуск или последний запуск на архитектуре.
+function memoryRun() {
+  if (current.run) return current.run;
+  return [...current.arch.runs].sort((a, b) => (a.started || '').localeCompare(b.started || '')).at(-1) ?? null;
+}
+
+function loadMemory(name) {
+  if (!memory.has(name)) {
+    memory.set(name, fetch(`/api/memory?run=${encodeURIComponent(name)}`).then(r => r.json())
+      .then(m => { memory.set(name, m); renderCard(); })
+      .catch(e => { memory.set(name, { error: e.message }); renderCard(); }));
+  }
+  const m = memory.get(name);
+  return m instanceof Promise ? null : m;
 }
 
 // ---------------------------------------------------------------- карточки
@@ -96,8 +123,10 @@ function renderCard() {
   const el = $('#card');
   if (!current) { el.innerHTML = ''; return; }
   const b = selectedBlock && blockById(selectedBlock);
-  el.innerHTML = b ? blockCard(b) : current.kind === 'run' ? runCard() : archCard();
+  el.innerHTML = b ? blockCard(b) : selectedGroup ? groupCard(selectedGroup)
+    : current.kind === 'run' ? runCard() : archCard();
   el.querySelectorAll('[data-block]').forEach(a => a.addEventListener('click', () => selectBlock(a.dataset.block)));
+  el.querySelectorAll('[data-group]').forEach(a => a.addEventListener('click', () => selectGroup(a.dataset.group)));
   el.querySelectorAll('[data-open]').forEach(a => a.addEventListener('click', () => open(...a.dataset.open.split(':'))));
 }
 
@@ -110,8 +139,8 @@ function archCard() {
   const { arch, schema } = current, inst = arch.instance, total = inst.total_params;
   let html = `<h2>${esc(arch.title)}</h2><p>${esc(schema.summary)}</p><h3>Из чего состоит</h3><div class="groups">`;
   for (const g of Object.keys(schema.groups)) {
-    const n = inst.group_params[g] ?? 0, first = inst.blocks.find(b => b.group === g);
-    html += `<a class="group" data-block="${first?.id ?? ''}">
+    const n = inst.group_params[g] ?? 0;
+    html += `<a class="group" data-group="${g}">
       <div class="gt"><i style="background:${GROUP_COLORS[g]}"></i>${esc(groupTitle(schema, g))}<span>${n ? pct(n, total) : ''}</span></div>
       <p>${esc(schema.groups[g].purpose)}</p>${n ? share(n, total, GROUP_COLORS[g]) : ''}</a>`;
   }
@@ -123,7 +152,19 @@ function archCard() {
     <table><tr><td>Всего весов</td><td>${num(total)}</td></tr>
     ${schema.vars.map(v => `<tr><td><code>${esc(v.name)}</code> ${esc(v.desc)}</td><td>${num(inst.vars[v.name])}</td></tr>`).join('')}
     <tr><td>Схема</td><td>${esc(schema.id)}</td></tr><tr><td>Коммит схемы</td><td>${esc(schema.model_commit.slice(0, 7))}</td></tr></table></details>`;
-  return html + '<p class="hint gap">Клик по блоку в сцене расскажет, зачем он нужен.</p>';
+  return html + '<p class="hint gap">Клик по блоку или подложке группы в сцене расскажет, зачем они нужны.</p>';
+}
+
+function groupCard(g) {
+  const { arch, schema } = current, inst = arch.instance, total = inst.total_params, color = GROUP_COLORS[g];
+  const blocks = inst.blocks.filter(b => b.group === g), n = inst.group_params[g] ?? 0;
+  let html = `<a class="back" data-block="">${icon('back', 16)}Вся модель</a>`;
+  html += `<p class="kind" style="color:${color}">Группа</p><h2>${esc(groupTitle(schema, g))}</h2>`;
+  html += `<p class="lead">${esc(schema.groups[g].purpose)}</p>`;
+  if (n) html += `<div class="hint">${num(n)} весов, ${pct(n, total)} модели</div>${share(n, total, color)}`;
+  html += `<h3>Блоки группы</h3><div class="groups">${blocks.map(b =>
+    `<a class="group" data-block="${b.id}"><div class="gt"><i style="background:${color}"></i>${esc(b.title)}</div><p>${esc(b.purpose)}</p></a>`).join('')}</div>`;
+  return html;
 }
 
 function runCard() {
@@ -137,22 +178,36 @@ function runCard() {
   html += `<details><summary>Для разработчика</summary><table>
     <tr><td>Коммит</td><td>${esc(run.commit.slice(0, 7))}${run.dirty ? ', с правками' : ''}</td></tr>
     <tr><td>Правила мира</td><td>r${esc(run.rules ?? '')}</td></tr></table></details>`;
-  return html + '<p class="hint gap">Схема одна на архитектуру: обучение меняет веса, но не устройство сети. Клик по блоку расскажет, зачем он нужен.</p>';
+  return html + '<p class="hint gap">Схема одна на архитектуру: обучение меняет веса, но не устройство сети. Память слоёв RWKV у каждой модели своя, она видна в карточке слоя.</p>';
 }
 
 const paramRows = params => params.map(p =>
   `<tr><td class="mono">${esc(p.name)}</td><td>${p.shape.join('×')}</td><td>${num(p.count)}</td></tr>`).join('');
 
+function memorySection(b) {
+  const run = memoryRun();
+  let html = '<h3>Как долго помнит этот слой</h3>';
+  if (!run) return html + '<p class="hint">На этой архитектуре ещё нет обученных моделей.</p>';
+  const m = loadMemory(run.name);
+  if (!m) return html + '<p class="hint">Загружаю веса модели.</p>';
+  if (m.error) return html + `<p class="hint">${esc(m.error)}</p>`;
+  return html + memoryView(m, b.index, current.kind === 'arch');
+}
+
 function blockCard(b) {
   const { arch, schema } = current, total = arch.instance.total_params, color = GROUP_COLORS[b.group];
   let html = `<a class="back" data-block="">${icon('back', 16)}Вся модель</a>`;
-  html += `<p class="kind" style="color:${color}">${esc(groupTitle(schema, b.group))}</p><h2>${esc(b.title)}</h2>`;
+  html += `<p class="kind"><a data-group="${b.group}" style="color:${color}">${esc(groupTitle(schema, b.group))}</a></p><h2>${esc(b.title)}</h2>`;
   html += `<p class="lead">${esc(b.purpose)}</p>`;
-  const io = ts => ts.map(t => `<span class="chip" style="--c:${color}">${esc(sizeText(t.shape))}</span>`).join('');
+  const io = ts => ts.map(t => `<span class="chip" style="--c:${color}">${t.label ? esc(t.label) + ', ' : ''}${esc(sizeText(t.shape))}</span>`).join('');
   html += '<div class="flow">';
   if (b.inputs.length) html += `<div><span class="hint">Получает</span>${io(b.inputs)}</div>${icon('to', 20)}`;
   html += `<div><span class="hint">Отдаёт</span>${io(b.outputs)}</div></div>`;
-  if (b.labels) html += `<h3>${b.group === 'input' ? 'Слои окна' : 'Варианты на выбор'}</h3>${chips(b.labels, color)}`;
+  if (b.labels && b.example?.kind !== 'probs') html += `<h3>${b.group === 'input' ? 'Слои' : 'Варианты'}</h3>${chips(b.labels, color)}`;
+  if (b.how.length) html += `<h3>Как это работает</h3>${b.how.map(p => `<p>${esc(p)}</p>`).join('')}`;
+  if (b.example) html += `<h3>Пример</h3>${exampleView(b, color)}`;
+  if (b.state) html += `<h3>Что хранит память</h3>${chips(b.state.slots.map(s => s.title), color)}`;
+  if (b.memory) html += memorySection(b);
   if (b.parts.length) html += `<h3>Внутри</h3><div class="parts">${b.parts.map(p =>
     `<div><b>${esc(p.title)}</b><p>${esc(p.purpose)}</p></div>`).join('')}</div>`;
   if (b.param_count) html += `<h3>Весов</h3><div class="big">${num(b.param_count)}</div>

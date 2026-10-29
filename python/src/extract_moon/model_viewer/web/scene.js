@@ -25,7 +25,7 @@ export function plural(n, one, few, many) {
 export function sizeText(s) {
   if (s.length === 3) return `${s[0]} ${plural(s[0], 'слой', 'слоя', 'слоёв')} ${s[1]}×${s[2]}`;
   if (s.length === 1) return `${s[0].toLocaleString('ru-RU')} ${plural(s[0], 'число', 'числа', 'чисел')}`;
-  if (s.length === 2) return `${s[0]} по ${s[1]} ${plural(s[1], 'числу', 'числа', 'чисел')}`;
+  if (s.length === 2) return `${s[0]} ${plural(s[0], 'вектор', 'вектора', 'векторов')} по ${s[1]} ${plural(s[1], 'числу', 'числа', 'чисел')}`;
   return s.join('×');
 }
 
@@ -35,8 +35,9 @@ function rand(seed) { const x = Math.sin(seed * 12.9898) * 43758.5453; return x 
 function glowTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 64;
   const g = c.getContext('2d'), grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.25, 'rgba(255,255,255,.7)');
-  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  // Плотная точка с мягким краем: на белом фоне размытое свечение почти не видно.
+  grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.55, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.75, 'rgba(255,255,255,.35)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(c);
 }
@@ -287,7 +288,7 @@ function softwareGL(renderer) {
   return /swiftshader|llvmpipe|software|basic render/i.test(name);
 }
 
-export function createScene(container, { onHover, onSelect, onCamera }) {
+export function createScene(container, { onHover, onSelect, onSelectGroup, onCamera }) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   const soft = softwareGL(renderer);
@@ -334,7 +335,8 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
   selRing.rotation.x = -Math.PI / 2; selRing.position.y = 0.03; selRing.visible = false;
   scene.add(selRing);
 
-  let root = null, blocks = new Map(), edges = [], pickables = [], animated = [];
+  let root = null, blocks = new Map(), edges = [], pickables = [], animated = [], plates = new Map();
+  let selGroup = null, hoverGroup = null;
   let hovered = null, selected = null, animate = false, fly = null, animT = 0, last = 0;
   const keys = new Set();
 
@@ -346,19 +348,19 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
       [].concat(o.material || []).forEach(m => m.dispose());
     });
     scene.remove(root);
-    root = null; blocks = new Map(); edges = []; pickables = []; animated = [];
+    root = null; blocks = new Map(); edges = []; pickables = []; animated = []; plates = new Map();
   }
 
-  function label(text, sub) {
+  function label(text, sub, cls = 'lbl') {
     const el = document.createElement('div');
-    el.className = 'lbl';
+    el.className = cls;
     el.innerHTML = `<b></b>${sub ? '<span></span>' : ''}`;
     el.querySelector('b').textContent = text;
     if (sub) el.querySelector('span').textContent = sub;
     return new CSS2DObject(el);
   }
 
-  function show(inst) {
+  function show(inst, groups = {}) {
     clear();
     root = new THREE.Group();
     scene.add(root);
@@ -372,8 +374,7 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
         if (o.userData.animate) animated.push(o.userData.animate);
         [].concat(o.material || []).forEach(m => { m.userData.baseEmissive = m.emissiveIntensity; });
       });
-      const out = b.outputs[0]?.shape;
-      const lbl = label(b.title, out ? sizeText(out) : '');
+      const lbl = label(b.short ?? b.title, '');  // в сцене короткое имя, полное в карточке
       lbl.position.set(0, size.y / 2 + (b.component === 'rwkv_layer' ? 0.9 : 0.55), 0);
       lbl.element.dataset.block = b.id;
       lbl.element.addEventListener('pointerenter', () => setHover(b.id));
@@ -383,9 +384,10 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
       blocks.set(b.id, { b, obj, size, color });
     }
     for (const e of inst.edges) addEdge(e);
+    addPlates(groups);
     animated.forEach(f => f(animT));  // начальный кадр, он же остаётся при выключенной анимации
     fitShadows();
-    hovered = null; select(null, false);
+    hovered = null; hoverGroup = null; selGroup = null; select(null, false);
     overview(false);
   }
 
@@ -400,7 +402,7 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
     const tubeMat = new THREE.MeshBasicMaterial({ color: A.color, transparent: true, opacity: 0.35, depthWrite: false });
     const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 48, width, 8), tubeMat);
     const n = Math.round(10 + 2 * lg(prod(e.shape))), pos = new Float32Array(n * 3);
-    const ptsMat = new THREE.PointsMaterial({ size: 0.28, map: GLOW, color: A.color, transparent: true, depthWrite: false });
+    const ptsMat = new THREE.PointsMaterial({ size: 0.55, map: GLOW, color: A.color, transparent: true, depthWrite: false, alphaTest: 0.05 });
     const pts = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(pos, 3)), ptsMat);
     pts.frustumCulled = false;
     pts.visible = animate;
@@ -417,6 +419,39 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
         pts.geometry.attributes.position.needsUpdate = true;
       },
     });
+  }
+
+  // Подложки групп, как рамки в нодовых редакторах: охватывают блоки группы, по клику открывают её описание.
+  function addPlates(groups) {
+    const boxes = new Map();
+    for (const { b, obj, size } of blocks.values()) {
+      const box = boxes.get(b.group) ?? new THREE.Box3();
+      box.expandByPoint(obj.position.clone().sub(size.clone().multiplyScalar(0.5)));
+      box.expandByPoint(obj.position.clone().add(size.clone().multiplyScalar(0.5)));
+      boxes.set(b.group, box);
+    }
+    for (const [g, box] of boxes) {
+      const color = GROUP_COLORS[g] ?? '#8d8d8d', pad = 0.9;
+      const w = box.max.x - box.min.x + pad * 2, dz = box.max.z - box.min.z + pad * 2;
+      const geo = new RoundedBoxGeometry(w, 0.08, dz, 2, 0.04);
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.08, depthWrite: false });
+      const plate = new THREE.Mesh(geo, mat);
+      plate.position.set((box.min.x + box.max.x) / 2, 0.05, (box.min.z + box.max.z) / 2);
+      plate.userData.group = g;
+      const frame = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, 0.001, dz)),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5 }));
+      frame.position.y = 0.05;
+      plate.add(frame);
+      const lbl = label(groups[g]?.title ?? g, '', 'grp');
+      lbl.element.dataset.group = g;
+      lbl.element.style.setProperty('--c', color);
+      lbl.position.set(-w / 2 + 0.2, 0.1, dz / 2);
+      lbl.center.set(0, 0);
+      plate.add(lbl);
+      root.add(plate);
+      pickables.push(plate);
+      plates.set(g, { plate, mat, frame, w, dz });
+    }
   }
 
   function bounds() {
@@ -494,8 +529,20 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
     onCamera?.(orthographic);
   }
 
+  function selectGroup(g, focus = true) {
+    selGroup = g; selected = null; selRing.visible = false;
+    const p = g && plates.get(g);
+    if (p && focus) {
+      // Расстояние, при котором подложка помещается в кадр по ширине и по глубине.
+      const fit = Math.max(p.w / (2 * tanHalf * persp.aspect), p.dz / (2 * tanHalf));
+      flyTo(p.plate.position.clone().setY(FLOW_Y), viewDir(), Math.max(12, fit * 1.25));
+    }
+    paint();
+  }
+
   function select(id, focus = true) {
     selected = id;
+    if (id) selGroup = null;
     const s = id && blocks.get(id);
     selRing.visible = !!s;
     if (s) {
@@ -518,8 +565,13 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
 
   // Подсветка меняется только при наведении и выборе, а не на каждом кадре.
   function paint() {
+    for (const [g, p] of plates) {
+      p.mat.opacity = g === selGroup ? 0.2 : g === hoverGroup ? 0.14 : 0.08;
+      p.frame.material.opacity = g === selGroup ? 1 : 0.5;
+    }
     for (const [id, s] of blocks) {
-      const boost = id === hovered ? 2.2 : id === selected ? 1.6 : 1;
+      const inGroup = s.b.group === selGroup;
+      const boost = id === hovered ? 2.2 : id === selected || inGroup ? 1.6 : 1;
       s.obj.traverse(o => [].concat(o.material || []).forEach(m => {
         if (m.emissive) m.emissiveIntensity = m.userData.baseEmissive * boost;
       }));
@@ -527,7 +579,7 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
     for (const { e, tubeMat, ptsMat } of edges) {
       const hot = [hovered, selected].some(id => id && (e.from === id || e.to === id));
       tubeMat.opacity = hot ? 0.75 : 0.35;
-      ptsMat.size = hot ? 0.42 : 0.26;
+      ptsMat.size = hot ? 0.75 : 0.55;
     }
     dirty = true;
   }
@@ -540,20 +592,30 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
     const r = labels.domElement.getBoundingClientRect();
     ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
-    return ray.intersectObjects(pickables, false)[0]?.object.userData.block ?? null;
+    const hit = ray.intersectObjects(pickables, false)[0]?.object.userData;
+    return hit ? { block: hit.block ?? null, group: hit.group ?? null } : { block: null, group: null };
+  }
+  function hoverAt(ev) {
+    const hit = pick(ev);
+    setHover(hit.block);
+    if (hoverGroup !== hit.group) { hoverGroup = hit.block ? null : hit.group; paint(); }
   }
   const dom = labels.domElement;
-  dom.addEventListener('pointermove', ev => { if (!down && ev.target === dom) setHover(pick(ev)); });
+  dom.addEventListener('pointermove', ev => { if (!down && ev.target === dom) hoverAt(ev); });
   dom.addEventListener('pointerdown', ev => { down = [ev.clientX, ev.clientY]; });
   // OrbitControls захватывает указатель, поэтому клик по подписи приходит сюда, а не в саму подпись.
   dom.addEventListener('pointerup', ev => {
     if (down && Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) < 5) {
-      const lbl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.lbl');
-      onSelect(lbl ? lbl.dataset.block : pick(ev));
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const lbl = el?.closest('.lbl'), grp = el?.closest('.grp');
+      const hit = lbl ? { block: lbl.dataset.block } : grp ? { group: grp.dataset.group } : pick(ev);
+      if (hit.block) onSelect(hit.block);
+      else if (hit.group) onSelectGroup?.(hit.group);
+      else onSelect(null);
     }
     down = null;
   });
-  dom.addEventListener('pointerleave', () => setHover(null));
+  dom.addEventListener('pointerleave', () => { setHover(null); hoverGroup = null; paint(); });
 
   const typing = ev => ['INPUT', 'TEXTAREA'].includes(ev.target.tagName);
   addEventListener('keydown', ev => {
@@ -658,7 +720,7 @@ export function createScene(container, { onHover, onSelect, onCamera }) {
   });
 
   return {
-    show, select, overview, setProjection, soft,
+    show, select, selectGroup, overview, setProjection, soft,
     snapAxis(name, sign = 1) { snap(AXES.find(a => a.name === name).dir.clone().multiplyScalar(sign)); },
     isOrtho: () => camera === ortho,
     setAnimate(v) { animate = v; edges.forEach(e => { e.pts.visible = v; }); dirty = true; },

@@ -83,7 +83,9 @@ def fmt(text: str, values: dict) -> str:
     def sub(m):
         name, *forms = m.group(1).split("|")
         v = values[name]
-        return plural(int(v), *forms) if forms else f"{v:,}".replace(",", " ")
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        return plural(int(v), *forms) if forms else f"{v:,}".replace(",", " ").replace(".", ",")
     return re.sub(r"\{([^{}]+)\}", sub, text or "")
 
 
@@ -97,8 +99,19 @@ def instantiate(schema: dict, cfg: dict) -> dict:
     for v in schema["vars"]:
         sc.vars[v["name"]], keys = sc.tracked(lambda: sc.eval(v["expr"]))
         sc.var_keys[v["name"]] = keys
-    tensors = lambda items: [{"name": t["name"], "shape": sc.shape(t["shape"]), "dtype": schema["dtype"]}
-                             for t in items or []]
+    tensors = lambda items: [{"name": t["name"], "shape": sc.shape(t["shape"]), "dtype": schema["dtype"],
+                              "label": t.get("label", "")} for t in items or []]
+
+    def example(ex):
+        """Пример данных блока: тексты с подстановкой, размеры частей вектора — по конфигу."""
+        if not ex:
+            return None
+        out = dict(ex)
+        if "segments" in ex:
+            out["segments"] = [{**seg, "size": int(sc.eval(seg["size"]))} for seg in ex["segments"]]
+        if "note" in ex:
+            out["note"] = fmt(ex["note"], sc.vars)
+        return out
 
     def params(items, i):
         out = []
@@ -125,11 +138,14 @@ def instantiate(schema: dict, cfg: dict) -> dict:
                     "id": b["id"] if "repeat" not in b else f"{b['id']}.{i}",
                     "base": b["id"], "index": i, "repeat": n if "repeat" in b else None,
                     "title": b["title"] + (f" {i + 1}" if "repeat" in b else ""),
+                    "short": b.get("short", b["title"]) + (f" {i + 1}" if "repeat" in b else ""),
                     "group": b["group"], "component": b["component"], "desc": b.get("desc", ""),
                     "purpose": fmt(b.get("purpose", ""), sc.vars),
+                    "how": [fmt(x, sc.vars) for x in b.get("how", [])], "example": example(b.get("example")),
                     "inputs": tensors(b.get("inputs")), "outputs": tensors(b.get("outputs")),
                     "params": own, "parts": parts, "labels": b.get("labels"),
                     "state": b.get("state") and {"shape": sc.shape(b["state"]["shape"]), "slots": b["state"]["slots"]},
+                    "memory": bool(b.get("memory")),
                     "param_count": sum(p["count"] for p in own) + sum(p["count"] for p in parts),
                 }
 
@@ -282,3 +298,34 @@ def catalog() -> dict:
              "vars": s["vars"], "status": schema_status(s)} for s in schemas.values()]
     order = sorted(archs.values(), key=lambda a: (not a["default"], a["instance"]["total_params"]))
     return {"schemas": meta, "archs": order, "orphans": orphans}
+
+
+# ------------------------------------------------------------------ память RWKV по весам
+
+_memory_cache: dict[tuple, dict] = {}
+
+
+def run_memory(name: str) -> dict:
+    """Полупериоды памяти каналов каждого слоя RWKV по последнему чекпойнту запуска.
+
+    За такт канал умножает накопленное на exp(-exp(time_decay)); половина старого
+    значения остаётся через ln 2 / exp(time_decay) тактов.
+    """
+    ck_dir = RUNS_DIR / name / "checkpoints"
+    files = sorted(ck_dir.glob("model_*.pt"))
+    if not files:
+        return {"error": "у запуска нет чекпойнтов"}
+    ck = files[-1]
+    key = (str(ck), ck.stat().st_mtime)
+    if key not in _memory_cache:
+        import torch  # тяжёлый импорт, нужен только здесь
+
+        state = torch.load(ck, map_location="cpu", weights_only=False)["model"]
+        layers = []
+        for i in range(len([k for k in state if k.endswith("att.time_decay")])):
+            td = state[f"blocks.{i}.att.time_decay"].float()
+            decay = torch.exp(-torch.exp(td))
+            half = (math.log(2) / torch.exp(td)).tolist()
+            layers.append({"half_life": half, "decay": decay.tolist()})
+        _memory_cache[key] = {"run": name, "checkpoint": ck.name, "update": int(ck.stem.split("_")[1]), "layers": layers}
+    return _memory_cache[key]

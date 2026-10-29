@@ -1,6 +1,7 @@
 """Просмотр архитектур: локальный HTTP-сервер с 3D-приложением и каталогом схем и запусков.
 
 GET /api/catalog — все схемы и все запуски с готовыми экземплярами моделей;
+GET /api/memory?run=имя — полупериоды памяти слоёв RWKV по последнему чекпойнту;
 GET /api/schemas — исходные JSON схем. Остальное — статика из web/.
 """
 
@@ -18,12 +19,19 @@ DEFAULT_PORT = 8765
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        from .schema import catalog, load_schemas
+        from urllib.parse import parse_qs, urlparse
+
+        from .schema import catalog, load_schemas, run_memory
 
         path = self.path.split("?")[0]
         try:
             if path == "/api/catalog":
                 return self._send(json.dumps(catalog(), ensure_ascii=False).encode(), "application/json")
+            if path == "/api/memory":
+                name = parse_qs(urlparse(self.path).query).get("run", [""])[0]
+                if not name or "/" in name or "\\" in name or name.startswith("."):
+                    return self._send(b'{"error": "bad run"}', "application/json", 400)
+                return self._send(json.dumps(run_memory(name)).encode(), "application/json")
             if path == "/api/schemas":
                 return self._send(json.dumps(load_schemas(), ensure_ascii=False).encode(), "application/json")
         except Exception as e:  # ошибка схемы не должна ронять сервер

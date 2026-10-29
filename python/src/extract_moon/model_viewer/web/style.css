@@ -121,3 +121,44 @@ details p { font-size: 13px; }
 .gizmo [data-axis] { cursor: pointer; }
 .gizmo [data-axis]:hover circle { stroke: #161616; stroke-width: 2; }
 .gizmo text { font: 600 11px "IBM Plex Sans", sans-serif; fill: #fff; pointer-events: none; }
+
+/* Подложки групп в сцене. */
+.grp { pointer-events: auto; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c); padding: 2px 8px;
+  background: #ffffffd9; border-left: 3px solid var(--c); white-space: nowrap; }
+.labels.hide-labels .grp { display: none; }
+#card .kind a { cursor: pointer; }
+
+/* Примеры данных. */
+.maps { display: flex; flex-wrap: wrap; gap: 10px; }
+.maps figure { margin: 0; }
+.maps figcaption { font-size: 11px; color: var(--muted); margin-top: 2px; max-width: 100px; }
+.strip { display: flex; height: 14px; gap: 1px; margin-bottom: 6px; }
+.kinds, #legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text2); }
+.kinds i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
+.seg { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.seg .st { display: flex; align-items: center; gap: 8px; }
+.seg .st i { width: 10px; height: 10px; }
+.seg .st span { margin-left: auto; color: var(--muted); font-size: 12px; }
+.seg p { margin: 2px 0 4px; font-size: 12px; }
+.cells { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+.cells i { width: 12px; height: 12px; display: inline-block; }
+.cells .hint { margin-left: 6px; }
+.nums { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--muted); }
+.merge { display: flex; flex-direction: column; gap: 6px; }
+.mrow { display: flex; gap: 4px; }
+.mbar { padding: 6px 8px; font-size: 12px; color: var(--text); background: color-mix(in srgb, var(--c) 15%, white);
+  border: 1px solid color-mix(in srgb, var(--c) 45%, white); white-space: nowrap; overflow: hidden; }
+.mstep { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.mstep .icon { transform: rotate(90deg); }
+.probs { display: flex; flex-direction: column; gap: 3px; }
+.prob { display: grid; grid-template-columns: 96px 1fr 48px; gap: 8px; align-items: center; font-size: 12px; }
+.prob b { font-weight: 400; text-align: right; color: var(--text2); }
+.prob.off { color: var(--muted); }
+.pbar { height: 10px; background: var(--layer); }
+.pbar > div { height: 100%; }
+.hist { display: flex; align-items: flex-end; gap: 3px; height: 110px; margin: 8px 0; }
+.hb { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
+.hb div { width: 100%; background: #8a3ffc; min-height: 1px; }
+.hb b { font-size: 10px; font-weight: 400; color: var(--muted); }
+.hb span { font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+.chip.on { background: var(--c); color: #fff; }
