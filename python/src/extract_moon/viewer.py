@@ -70,6 +70,26 @@ class Renderer:
                 out[rb["id"]] = (int((x + 0.5 + ox) * c), int((y + 0.5 + oy) * c))
         return out
 
+    def moving_centers(self, idx: int, alpha: float) -> dict:
+        """Позиции роботов на доле alpha пути от такта idx к следующему."""
+        centers = self.robot_centers(self.frames[idx])
+        if alpha <= 0 or idx + 1 >= len(self.frames):
+            return centers
+        nxt_frame = self.frames[idx + 1]
+        nxt = self.robot_centers(nxt_frame)
+        sh, c = nxt_frame["ship"], self.cell
+        # Севший в корабль в следующем такте летит к кораблю.
+        boarding = {rb["id"] for rb in nxt_frame["robots"] if rb["status"] == "boarded"}
+        for rid, (x0, y0) in centers.items():
+            if rid in nxt:
+                x1, y1 = nxt[rid]
+            elif rid in boarding:
+                x1, y1 = (sh["x"] + 0.5) * c, (sh["y"] + 0.5) * c
+            else:
+                continue
+            centers[rid] = (int(x0 + (x1 - x0) * alpha), int(y0 + (y1 - y0) * alpha))
+        return centers
+
     def vision(self, frame: dict) -> dict:
         """Клетки, которые видит хотя бы один робот фракции: {клетка: множество фракций}."""
         S, s, seen = self.size, self.sight, {}
@@ -100,7 +120,9 @@ class Renderer:
         surf.blit(layer, (0, 0))
 
     def draw(self, surf, idx: int, selected: int | None = None, playing: bool = False, speed: float = 1,
-             vision: bool = True, stage: tuple[int, int] = (0, 1), mouse=None):
+             vision: bool = True, stage: tuple[int, int] = (0, 1), mouse=None, alpha: float = 0.0,
+             smooth: bool = True):
+        """alpha — доля пути к следующему такту: роботы рисуются между клетками, остальное — по такту idx."""
         pg, c = self.pg, self.cell
         fr = self.frames[idx]
         surf.fill(BG)
@@ -128,7 +150,7 @@ class Renderer:
         pg.draw.rect(surf, (60, 60, 70), (sh["x"] * c - c // 2, sh["y"] * c + c + 2, 2 * c, 5))
         pg.draw.rect(surf, (120, 230, 255), (sh["x"] * c - c // 2, sh["y"] * c + c + 2, int(2 * c * frac), 5))
 
-        centers = self.robot_centers(fr)
+        centers = self.centers = self.moving_centers(idx, alpha)
         ship_c = ((sh["x"] + 0.5) * c, (sh["y"] + 0.5) * c)
 
         # События такта.
@@ -176,7 +198,7 @@ class Renderer:
 
         self.draw_panel(surf, fr, idx, selected)
         if self.controls:
-            self.draw_toolbar(surf, idx, playing, speed, vision, stage, mouse)
+            self.draw_toolbar(surf, idx, playing, speed, vision, stage, mouse, smooth)
 
     def draw_panel(self, surf, fr, idx, selected):
         pg = self.pg
@@ -243,7 +265,7 @@ class Renderer:
                 pg.draw.rect(surf, (70, 76, 92), rect, 2, border_radius=6)
         return y + h + 8
 
-    def draw_toolbar(self, surf, idx, playing, speed, vision, stage, mouse):
+    def draw_toolbar(self, surf, idx, playing, speed, vision, stage, mouse, smooth=True):
         pg = self.pg
         y0 = self.map_h
         pg.draw.rect(surf, (24, 27, 35), (0, y0, self.width, TOOLBAR_H))
@@ -289,6 +311,7 @@ class Renderer:
         button("этап >", "stage+", enabled=i_stage < n_stage - 1)
         x += 14
         button(f"Обзор: {'вкл' if vision else 'выкл'}", "vision")
+        button(f"Плавно: {'вкл' if smooth else 'выкл'}", "smooth")
         button("Снимок", "shot")
         button("GIF", "gif")
 
@@ -315,7 +338,8 @@ class Renderer:
 
     def pick(self, frame, pos) -> int | None:
         best, bd = None, (self.cell * 0.6) ** 2
-        for rid, (x, y) in self.robot_centers(frame).items():
+        # Во время движения кликают по тому месту, где робот нарисован.
+        for rid, (x, y) in (getattr(self, "centers", None) or self.robot_centers(frame)).items():
             d = (x - pos[0]) ** 2 + (y - pos[1]) ** 2
             if d < bd:
                 best, bd = rid, d
@@ -410,11 +434,11 @@ def run_viewer(target: Path, cell: int | None = None) -> None:
 
     open_stage(stage)
     clock = pygame.time.Clock()
-    idx, playing, speed_i, selected, acc, vision = 0, True, 0, None, 0.0, True
+    idx, playing, speed_i, selected, acc, vision, smooth = 0, True, 0, None, 0.0, True, True
     dragging = False
 
     def do(action: str, pos=None):
-        nonlocal idx, playing, speed_i, vision, acc
+        nonlocal idx, playing, speed_i, vision, acc, smooth
         if action == "seek":
             idx, acc = rd.seek_index(pos), 0.0
         elif action == "start":
@@ -437,13 +461,16 @@ def run_viewer(target: Path, cell: int | None = None) -> None:
             switch_stage(-1 if action == "stage-" else 1)
         elif action == "vision":
             vision = not vision
+        elif action == "smooth":
+            smooth = not smooth
         elif action == "shot":
             save_shot()
         elif action == "gif":
             save_gif()
 
     keys = {pygame.K_SPACE: "play", pygame.K_LEFT: "prev", pygame.K_RIGHT: "next", pygame.K_UP: "faster",
-            pygame.K_DOWN: "slower", pygame.K_v: "vision", pygame.K_s: "shot", pygame.K_g: "gif"}
+            pygame.K_DOWN: "slower", pygame.K_v: "vision", pygame.K_s: "shot", pygame.K_g: "gif",
+            pygame.K_i: "smooth"}
     while True:
         dt = clock.tick(60) / 1000
         for ev in pygame.event.get():
@@ -476,5 +503,7 @@ def run_viewer(target: Path, cell: int | None = None) -> None:
                     idx += 1
                 else:
                     playing = False
-        rd.draw(screen, idx, selected, playing, SPEEDS[speed_i], vision, (stage, len(paths)), pygame.mouse.get_pos())
+        alpha = acc if playing and smooth else 0.0
+        rd.draw(screen, idx, selected, playing, SPEEDS[speed_i], vision, (stage, len(paths)), pygame.mouse.get_pos(),
+                alpha, smooth)
         pygame.display.flip()
