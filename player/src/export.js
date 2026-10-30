@@ -19,10 +19,9 @@ async function pickCodec(width, height, bitrate, framerate) {
 }
 
 /** tickAt(j) — дробный такт кадра j с учётом скорости и плавности. */
-export async function renderVideo({ world, canvas, height, fps, frames, tickAt, onProgress, cancelled }) {
-  const aspect = canvas.width / canvas.height;
+export async function renderVideo({ world, canvas, width, height, fps, frames, tickAt, onProgress, cancelled }) {
+  const w = width & ~1; // кодеку нужны чётные размеры
   const h = height & ~1;
-  const w = Math.round(h * aspect) & ~1;
   const bitrate = Math.round(w * h * fps * 0.14);
   const { config, muxer: codec } = await pickCodec(w, h, bitrate, fps);
   const target = new ArrayBufferTarget();

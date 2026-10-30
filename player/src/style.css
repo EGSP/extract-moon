@@ -54,6 +54,11 @@ button.projection { padding: 0 12px; font-size: 12px; width: 96px; }
 #camera-tools button:hover { background: var(--layer-hover); }
 #camera-hint { position: absolute; left: 16px; bottom: 12px; color: var(--muted); font-size: 12px; letter-spacing: .32px;
   pointer-events: none; }
+#frame-guide { position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%); pointer-events: none;
+  box-shadow: 0 0 0 100vmax #00000073; outline: 1px dashed var(--text-2); }
+#custom-size { gap: 6px; }
+#custom-size input { width: 72px; height: 40px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--border-strong);
+  background: var(--layer-2); color: var(--text); font: 12px "IBM Plex Mono", Consolas, monospace; }
 #empty { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 460px; padding: 16px;
   background: var(--layer); border-left: 3px solid var(--interactive); }
 
@@ -117,7 +122,30 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 14px; heigh
 #toast { position: fixed; right: 356px; bottom: 112px; max-width: 560px; padding: 12px 16px; background: var(--layer-2);
   border-left: 3px solid var(--success); font-size: 12px; overflow-wrap: anywhere; }
 #toast.error { border-left-color: var(--error); }
-#modal { position: fixed; inset: 0; display: grid; place-items: center; background: #161616b0; }
+#modal, .overlay { position: fixed; inset: 0; display: grid; place-items: center; background: #161616b0; }
+.dialog.timeline { width: 640px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; }
+#tl-bar { position: relative; height: 32px; background: var(--layer-2); margin-bottom: 12px; }
+.tl-part { position: absolute; top: 0; bottom: 0; height: auto; min-width: 3px; padding: 0; margin: 0 !important; border-right: 1px solid var(--layer); }
+.tl-part.command, .tl-part.command:disabled { background: var(--interactive) !important; cursor: default; }
+.tl-part.gap.keep { background: #8d8d8d; }
+.tl-part.gap.keep:hover { background: #a8a8a8 !important; }
+.tl-part.gap.cut { background: repeating-linear-gradient(135deg, #393939 0 6px, #262626 6px 12px); }
+.tl-part.gap.cut:hover { background: repeating-linear-gradient(135deg, #525252 0 6px, #393939 6px 12px) !important; }
+.tl-sliders { position: relative; height: 20px; }
+.tl-sliders input { position: absolute; inset: 0; width: 100%; pointer-events: none; }
+.tl-sliders input::-webkit-slider-runnable-track { background: transparent; }
+.tl-sliders input::-webkit-slider-thumb { pointer-events: auto; margin-top: 0; }
+.tl-inputs { display: flex; gap: 24px; margin: 8px 0 12px; font-size: 12px; color: var(--text-2); }
+.tl-inputs input { width: 80px; height: 32px; margin-left: 8px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--border-strong);
+  background: var(--layer-2); color: var(--text); font: 12px "IBM Plex Mono", Consolas, monospace; }
+#tl-rows { margin-bottom: 12px; }
+#tl-rows tr.off td { color: var(--muted); text-decoration: line-through; }
+#tl-rows td:nth-child(2), #tl-rows th:nth-child(2) { text-align: left; }
+#tl-rows td:first-child, #tl-rows th:first-child { width: 24px; }
+#tl-summary { color: var(--text); font-size: 12px; letter-spacing: .32px; }
+.tl-actions { display: flex; align-items: center; gap: 1px; }
+.dialog.timeline .tl-actions button.primary-text { background: var(--primary); }
+.dialog.timeline .tl-actions button.primary-text:disabled { background: var(--layer-2); }
 .dialog { width: 420px; padding: 16px; background: var(--layer); }
 .dialog h2 { font-size: 20px; font-weight: 400; }
 .dialog p { color: var(--text-2); margin-bottom: 12px; }

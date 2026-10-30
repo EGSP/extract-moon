@@ -27,6 +27,7 @@
             <button id="cam-home" class="icon" title="Общий вид (0)" data-icon="home"></button>
           </div>
         </div>
+        <div id="frame-guide" hidden></div>
         <p id="camera-hint">Левая кнопка вращает камеру, правая сдвигает, колесо приближает</p>
         <div id="empty" hidden></div>
       </div>
@@ -88,13 +89,26 @@
           <button id="smooth" class="toggle on" title="Плавное движение между тактами (I)"></button>
         </div>
         <span class="spacer"></span>
-        <label class="field">Качество
+        <label class="field">Размер видео
           <select id="quality">
-            <option value="720">720p</option>
-            <option value="1080" selected>1080p</option>
-            <option value="1440">1440p</option>
+            <option value="window:720">Как окно, 720p</option>
+            <option value="window:1080" selected>Как окно, 1080p</option>
+            <option value="window:1440">Как окно, 1440p</option>
+            <option value="1920x1080">1920 × 1080</option>
+            <option value="1600x900">1600 × 900</option>
+            <option value="1280x720">1280 × 720</option>
+            <option value="1200x900">1200 × 900</option>
+            <option value="1200x676">1200 × 676</option>
+            <option value="1080x1080">1080 × 1080</option>
+            <option value="1080x1920">1080 × 1920</option>
+            <option value="custom">Свой размер</option>
           </select>
         </label>
+        <span id="custom-size" class="group" hidden>
+          <input id="custom-w" type="number" min="64" max="3840" step="2" value="1200" aria-label="Ширина видео" />
+          <span class="muted">×</span>
+          <input id="custom-h" type="number" min="64" max="2160" step="2" value="800" aria-label="Высота видео" />
+        </span>
         <div class="group">
           <button id="shot" class="ghost" title="Снимок кадра (S)"></button>
           <button id="export" class="ghost" title="Видео MP4 с текущей камерой и настройками (M)"></button>
@@ -104,6 +118,31 @@
     </footer>
 
     <div id="toast" role="status" hidden></div>
+    <div id="timeline-dialog" class="overlay" hidden>
+      <div class="dialog timeline">
+        <h2>Что рендерить</h2>
+        <p id="tl-size"></p>
+        <div id="tl-bar"></div>
+        <div id="tl-range" hidden>
+          <div class="tl-sliders">
+            <input id="tl-from" type="range" min="0" step="1" aria-label="Начало диапазона" />
+            <input id="tl-to" type="range" min="0" step="1" aria-label="Конец диапазона" />
+          </div>
+          <div class="tl-inputs">
+            <label>С такта <input id="tl-from-num" type="number" min="0" step="1" /></label>
+            <label>До такта <input id="tl-to-num" type="number" min="0" step="1" /></label>
+          </div>
+        </div>
+        <div id="tl-rows"></div>
+        <p id="tl-summary"></p>
+        <div class="tl-actions">
+          <button id="tl-cut-gaps" class="ghost">Вырезать промежутки</button>
+          <span class="spacer"></span>
+          <button id="tl-cancel" class="ghost">Отмена</button>
+          <button id="tl-confirm" class="primary-text">Рендерить</button>
+        </div>
+      </div>
+    </div>
     <div id="modal" hidden>
       <div class="dialog">
         <h2>Экспорт видео</h2>

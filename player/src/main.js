@@ -12,6 +12,7 @@ import { renderVideo } from "./export.js";
 import { Gizmo } from "./gizmo.js";
 import { factionColor, iconSvg, LEGEND, onColor, preloadIcons } from "./icons.js";
 import { loadStage, openFolder, saveOutput, stages } from "./replay.js";
+import { chooseRanges, rangesLength, splitTimeline, tickInRanges } from "./timeline.js";
 import { LAUNCH_TAIL, World } from "./world.js";
 
 // Скорость воспроизведения, тактов в секунду, как в старом проигрывателе.
@@ -269,17 +270,39 @@ async function saveShot() {
 }
 
 /** Файл рядом с видео: чем и как снят ролик, чтобы повторить кадр позже. */
-function exportMeta(file, video, speed, span, camera, settings, list) {
+function exportMeta(file, video, speed, ranges, span, camera, settings, list) {
   const { name, header, frames } = state.rep;
   return JSON.stringify({
     createdAt: new Date().toISOString(),
     video: { file, ...video, durationSeconds: video.frames / video.fps },
     replay: { name, seed: header.seed, mapSize: header.map.size, ticks: frames[frames.length - 1].t, model: header.model },
-    playback: { ticksPerSecond: speed, fromTick: 0, toTick: span, launchTailTicks: span - lastFrame() },
+    playback: { ticksPerSecond: speed, ranges, totalTicks: span, launchTailTicks: span - lastFrame() },
     settings,
     camera,
     commands: list,
   }, null, 2);
+}
+
+/** Размер кадра видео. «Как окно» берёт пропорции окна, остальные варианты от окна не зависят. */
+function videoSize() {
+  const value = $("quality").value;
+  if (value.startsWith("window:")) {
+    const height = Number(value.slice(7));
+    return [Math.round((height * canvas.width) / canvas.height), height];
+  }
+  const clamp = (v, max) => Math.min(Math.max(Math.round(v) || 64, 64), max);
+  if (value === "custom") return [clamp(Number($("custom-w").value), 3840), clamp(Number($("custom-h").value), 2160)];
+  return value.split("x").map(Number);
+}
+
+/** Рамка на сцене показывает кадр видео, если он уже окна; более широкий кадр захватит сцену по бокам. */
+function showFrameGuide() {
+  const guide = $("frame-guide");
+  const [w, h] = videoSize();
+  const box = $("viewport").getBoundingClientRect();
+  const width = box.height * (w / h);
+  guide.hidden = $("quality").value.startsWith("window:") || width >= box.width - 1;
+  guide.style.width = `${width}px`;
 }
 
 async function exportVideo() {
@@ -287,23 +310,33 @@ async function exportVideo() {
   state.exporting = true;
   setPlaying(false);
   const speed = SPEEDS[state.speed];
-  const height = Number($("quality").value);
+  const [width, height] = videoSize();
   const span = maxTick();
   const camera = world.cameraState();
   const animated = commands.enabled.length > 0;
   const list = commands.enabled;
   const settings = { smooth: state.smooth, ...world.options, selectedRobot: world.selected };
-  const frames = Math.max(Math.round((span / speed) * FPS), 1) + 1;
+  const ranges = await chooseRanges({
+    parts: splitTimeline(list, span, commandTitle),
+    span,
+    speed,
+    sizeText: `${width} × ${height}, ${FPS} кадров в секунду, ${speedLabel(speed)}`,
+  });
+  if (!ranges) {
+    state.exporting = false;
+    return;
+  }
+  const frames = Math.max(Math.round((rangesLength(ranges) / speed) * FPS), 1) + 1;
   let stop = false;
   $("modal-cancel").onclick = () => { stop = true; };
-  $("modal-text").textContent = `${height}p, ${FPS} кадров в секунду, ${speedLabel(speed)}, длительность ${Math.ceil(frames / FPS)} с`;
+  $("modal-text").textContent = `${width} × ${height}, ${FPS} кадров в секунду, ${speedLabel(speed)}, длительность ${Math.ceil(frames / FPS)} с`;
   $("modal-bar").style.width = "0";
   $("modal").hidden = false;
   try {
     const result = await renderVideo({
-      world, canvas, height, fps: FPS, frames,
+      world, canvas, width, height, fps: FPS, frames,
       tickAt: (j) => {
-        const tick = Math.min((j * speed) / FPS, span);
+        const tick = tickInRanges(ranges, (j * speed) / FPS);
         if (animated) followCommands(tick);
         return shownTick(tick);
       },
@@ -314,7 +347,7 @@ async function exportVideo() {
       const stem = `${state.rep.name}_3d${animated ? "_anim" : ""}`;
       const file = `${stem}.mp4`;
       const path = await saveOutput(state.rep.name, "video", file, result.bytes);
-      const meta = exportMeta(file, result.video, speed, span, camera, settings, list);
+      const meta = exportMeta(file, result.video, speed, ranges, span, camera, settings, list);
       await saveOutput(state.rep.name, "video", `${stem}.json`, new TextEncoder().encode(meta));
       toast(`Видео и параметры сохранены: ${path}`);
     }
@@ -343,7 +376,7 @@ function showCommands() {
   const orbiting = active?.type === "orbit";
   orbit.classList.toggle("recording", orbiting);
   orbit.innerHTML = orbiting
-    ? `${iconSvg("stopFilled", 16)}<span>Остановить вращение</span>`
+    ? `${iconSvg("stopFilled", 16)}<span>Остановить</span>`
     : `${iconSvg("rotate", 16)}<span>Начать вращение</span>`;
   $("follow").checked = commands.follow;
   for (const [id, rotate, icon, text] of [["follow-plain", false, "location", "Следовать за роботом"], ["follow-turn", true, "compass", "Следовать с поворотом"]]) {
@@ -379,7 +412,8 @@ function toggleOrbit() {
   const wasOrbit = commands.recording?.type === "orbit";
   commands.stop(state.tick);
   if (!wasOrbit) {
-    commands.add("orbit", state.tick, world.cameraState(), { rate: Number($("orbit-rate").value) });
+    commands.add("orbit", state.tick, world.centeredCameraState(), { rate: Number($("orbit-rate").value) });
+    draw();
     if (!state.playing && state.tick < maxTick()) setPlaying(true);
   }
   showCommands();
@@ -476,6 +510,12 @@ function bindUi() {
   $("stage-prev").onclick = () => switchStage(-1);
   $("stage-next").onclick = () => switchStage(1);
   $("speed").onchange = (e) => setSpeed(Number(e.target.value));
+  $("quality").onchange = (e) => {
+    $("custom-size").hidden = e.target.value !== "custom";
+    showFrameGuide();
+  };
+  $("custom-w").oninput = showFrameGuide;
+  $("custom-h").oninput = showFrameGuide;
   $("seek").oninput = (e) => { state.tick = Number(e.target.value); draw(); };
 
   // Перетаскивание вращает камеру, поэтому выбором считается только щелчок без сдвига.
@@ -515,7 +555,11 @@ function bindUi() {
       ACTIONS_BY_NAME[keys[key]]();
     }
   });
-  new ResizeObserver(() => { if (!state.exporting) world.resize(); }).observe($("viewport"));
+  new ResizeObserver(() => {
+    if (state.exporting) return;
+    world.resize();
+    showFrameGuide();
+  }).observe($("viewport"));
 }
 
 function showEmpty(text) {

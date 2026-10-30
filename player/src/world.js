@@ -3,6 +3,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { gaussian, sampleCurve, unwrapAngles } from "./track.js";
 import { ACTION_ICONS, badgeTexture, factionColor, glintTexture, glowTexture, labelTexture, slotTexture } from "./icons.js";
 
 export const LAUNCH_TAIL = 8; // тактов после конца матча: корабль набирает высоту
@@ -20,9 +21,9 @@ const FX_Y = 0.55; // высота снарядов и лучей
 const FX_ORDER = 200000; // эффекты боя рисуются поверх всех значков
 const HOME = new THREE.Vector3(0.62, 1, 0.82).normalize();
 const UP = new THREE.Vector3(0, 1, 0);
-// Окна сглаживания камеры в тактах: робот ходит рывками от клетки к клетке.
-const TRACK_WINDOW = 0.5;
-const YAW_WINDOW = 1.5;
+// Сглаживание камеры в тактах: поворот плавнее положения, иначе кадр качается на каждом шаге.
+const TRACK_SIGMA = 1;
+const YAW_SIGMA = 3.5;
 
 function random(seed) {
   let s = seed >>> 0;
@@ -794,6 +795,15 @@ export class World {
 
   // -------------------------------------------------------------- камера
 
+  /** Текущий вид, сдвинутый так, что камера смотрит в центр карты: расстояние и наклон те же. */
+  centeredCameraState() {
+    const state = this.cameraState();
+    const shift = this.center.sub(new THREE.Vector3(...state.target));
+    state.position = this.camera.position.clone().add(shift).toArray();
+    state.target = this.center.toArray();
+    return state;
+  }
+
   /** Всё, что нужно, чтобы восстановить вид; записывается рядом с видео. */
   cameraState() {
     const cam = this.camera;
@@ -854,44 +864,34 @@ export class World {
     this.applyCamera(state, angle, new THREE.Vector3(...state.target), to);
   }
 
-  /** Где робот на дробном такте. Погибший или севший в корабль остаётся в последней известной точке. */
-  robotPoint(id, tick) {
-    const { layout } = this.rep;
-    const last = layout.length - 1;
-    const idx = Math.min(Math.max(Math.floor(tick), 0), last);
-    const here = this.bodyPosition(id, idx, Math.min(Math.max(tick - idx, 0), 1));
-    if (here) return here;
-    for (let i = idx - 1; i >= 0; i--) {
-      if (layout[i].has(id)) return layout[i].get(id);
-    }
-    return [this.size / 2, this.size / 2];
+  /** Сглаженный путь робота по тактам. Вне своей жизни робот стоит в ближайшей известной точке. */
+  robotTrack(id) {
+    this.rep.tracks ??= new Map();
+    if (this.rep.tracks.has(id)) return this.rep.tracks.get(id);
+    const { layout, yaw } = this.rep;
+    const hold = (values) => {
+      const first = values.find((v) => v !== undefined);
+      let cur = first;
+      return values.map((v) => (cur = v ?? cur));
+    };
+    const cells = hold(layout.map((m) => m.get(id)));
+    const yaws = hold(yaw.map((m) => m.get(id))).map((a) => a ?? 0);
+    const track = {
+      x: gaussian(cells.map((p) => p[0]), TRACK_SIGMA),
+      z: gaussian(cells.map((p) => p[1]), TRACK_SIGMA),
+      yaw: gaussian(unwrapAngles(yaws), YAW_SIGMA),
+    };
+    this.rep.tracks.set(id, track);
+    return track;
   }
 
   smoothPoint(id, tick) {
-    let x = 0;
-    let z = 0;
-    const n = 9;
-    for (let i = 0; i < n; i++) {
-      const [px, pz] = this.robotPoint(id, tick + TRACK_WINDOW * (2 * i / (n - 1) - 1));
-      x += px;
-      z += pz;
-    }
-    return [x / n, z / n];
+    const t = this.robotTrack(id);
+    return [sampleCurve(t.x, tick), sampleCurve(t.z, tick)];
   }
 
-  /** Направление робота, усреднённое по окну: так камера не дёргается при каждом развороте. */
   smoothYaw(id, tick) {
-    const { yaw } = this.rep;
-    let s = 0;
-    let c = 0;
-    const n = 13;
-    for (let i = 0; i < n; i++) {
-      const t = tick + YAW_WINDOW * (2 * i / (n - 1) - 1);
-      const a = yaw[Math.min(Math.max(Math.floor(t), 0), yaw.length - 1)].get(id) ?? 0;
-      s += Math.sin(a);
-      c += Math.cos(a);
-    }
-    return Math.atan2(s, c);
+    return sampleCurve(this.robotTrack(id).yaw, tick);
   }
 
   /** Вид вдоль оси гизмо. Горизонтальный вид чуть приподнят: камера не опускается под грунт. */
