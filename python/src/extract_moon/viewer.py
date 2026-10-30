@@ -2,7 +2,8 @@
 
 Управление — кнопками внизу окна. Дублирующие клавиши: пробел — пауза, ←/→ — такт
 назад/вперёд, ↑/↓ — скорость, V — зоны обзора фракций, клик или Tab — выбрать
-робота, S — снимок экрана, G — экспорт GIF. Клик по полосе времени — перейти к такту.
+робота, S — снимок экрана, G — экспорт GIF, M — видео MP4 только с картой (скорость как в проигрывателе, с плавным движением),
+O — открыть папку со снимками, GIF и видео. Клик по полосе времени — перейти к такту.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ BUTTON, BUTTON_HOVER, BUTTON_OFF = (48, 54, 70), (70, 78, 100), (34, 38, 48)
 EVENT_COLORS = {"attack": (255, 70, 70), "give": (90, 230, 120), "deposit": (250, 210, 80)}
 PANEL_W = 420
 TOOLBAR_H = 74
-TOOLBAR_W = 1250  # ширина, при которой помещаются все кнопки
+TOOLBAR_W = 1430# ширина, при которой помещаются все кнопки
 # Скорость воспроизведения, тактов в секунду. По умолчанию — такт в 2 секунды.
 SPEEDS = [0.5, 1, 2, 4, 8, 16, 32]
 
@@ -330,6 +331,8 @@ class Renderer:
         button(f"Плавно: {'вкл' if smooth else 'выкл'}", "smooth")
         button("Снимок", "shot")
         button("GIF", "gif")
+        button("Видео", "video")
+        button("Папка", "folder")
 
     def action_at(self, pos):
         for rect, action in self.buttons:
@@ -378,6 +381,47 @@ def export_gif(path: Path, out: Path, cell: int = 20, fps: int = 8, selected: in
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     images[0].save(out, save_all=True, append_images=images[1:], duration=int(1000 / fps), loop=0, optimize=True)
+    return out
+
+
+def export_video(path: Path, out: Path, cell: int = 20, speed: float = 2, fps: int = 30,
+                 selected: int | None = None, vision: bool = True, progress=None) -> Path:
+    """MP4 только с картой (без боковой панели и кнопок). speed — тактов в секунду, как в проигрывателе;
+    роботы плавно движутся между тактами, как при включённой интерполяции."""
+    import subprocess
+
+    import imageio_ffmpeg
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    import pygame
+
+    header, frames = load_replay(path)
+    rd = Renderer(header, frames, cell, controls=False)
+    side = rd.size * cell // 2 * 2  # кодеку нужны чётные размеры
+    surf = pygame.Surface((side, side))
+    total = max(round((len(frames) - 1) / speed * fps), 1) + 1  # кадров видео; последний — конечный такт
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+           "-s", f"{side}x{side}", "-r", str(fps), "-i", "-", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           "-crf", "18", "-movflags", "+faststart", str(out)]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        for j in range(total):
+            tick = min(j * speed / fps, len(frames) - 1)
+            idx = min(int(tick), len(frames) - 1)
+            rd.draw(surf, idx, selected, vision=vision, alpha=tick - idx if idx < len(frames) - 1 else 0.0)
+            proc.stdin.write(pygame.image.tobytes(surf, "RGB"))
+            if progress and j % 20 == 0:
+                progress(j, total)
+        proc.stdin.close()
+        err = proc.stderr.read().decode(errors="replace")
+        if proc.wait():
+            raise RuntimeError(f"ffmpeg завершился с ошибкой: {err.strip()}")
+    except BaseException:
+        proc.kill()
+        raise
     return out
 
 
@@ -448,6 +492,25 @@ def run_viewer(target: Path, cell: int | None = None) -> None:
         export_gif(path, out, selected=selected, vision=vision)
         pygame.display.set_caption(f"Extract Moon — сохранено {out}")
 
+    def save_video():
+        out = Path(path).parent / f"{replay_name(path)}.mp4"
+
+        def progress(done, total):
+            pygame.display.set_caption(f"Экспорт видео… {done * 100 // total}%")
+            pygame.event.pump()  # окно не должно «зависнуть» для системы
+
+        progress(0, 1)
+        try:
+            # Скорость берётся в момент нажатия; видео всегда с плавным движением роботов.
+            export_video(path, out, rd.cell, SPEEDS[speed_i], selected=selected, vision=vision, progress=progress)
+            pygame.display.set_caption(f"Extract Moon — видео сохранено {out}")
+        except Exception as e:  # ошибка кодирования не должна закрывать проигрыватель
+            pygame.display.set_caption(f"Extract Moon — видео не сохранено: {e}")
+
+    def open_folder():
+        # Папка реплеев запуска: GIF лежат в ней, снимки — в подпапке screens.
+        os.startfile(Path(path).parent)  # noqa: S606 — открыть в проводнике (Windows)
+
     open_stage(stage)
     clock = pygame.time.Clock()
     idx, playing, speed_i, selected, acc, vision, smooth = 0, True, 0, None, 0.0, True, True
@@ -483,10 +546,15 @@ def run_viewer(target: Path, cell: int | None = None) -> None:
             save_shot()
         elif action == "gif":
             save_gif()
+        elif action == "video":
+            save_video()
+        elif action == "folder":
+            open_folder()
 
     keys = {pygame.K_SPACE: "play", pygame.K_LEFT: "prev", pygame.K_RIGHT: "next", pygame.K_UP: "faster",
             pygame.K_DOWN: "slower", pygame.K_v: "vision", pygame.K_s: "shot", pygame.K_g: "gif",
-            pygame.K_i: "smooth"}
+            pygame.K_i: "smooth", pygame.K_o: "folder",
+            pygame.K_m: "video"}
     while True:
         dt = clock.tick(60) / 1000
         for ev in pygame.event.get():

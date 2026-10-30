@@ -54,16 +54,18 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def serve(port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
+def make_server(port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
     mimetypes.add_type("application/javascript", ".js")
     for p in range(port, port + 20):  # порт занят — берём следующий
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", p), Handler)
-            break
+            return ThreadingHTTPServer(("127.0.0.1", p), Handler)
         except OSError:
             continue
-    else:
-        raise OSError(f"свободного порта нет в {port}–{port + 19}")
+    raise OSError(f"свободного порта нет в {port}–{port + 19}")
+
+
+def serve(port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
+    server = make_server(port)
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"архитектуры моделей: {url} (Ctrl+C — остановить)")
     if open_browser:

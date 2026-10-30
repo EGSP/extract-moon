@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Extract Moon</title>
+  </head>
+  <body>
+    <header id="shell">
+      <span class="brand">Extract Moon</span>
+      <span id="match" class="muted"></span>
+      <span class="spacer"></span>
+      <div class="group">
+        <button id="stage-prev" class="icon" title="Предыдущий этап обучения" data-icon="chevronLeft"></button>
+        <span id="stage" class="readout"></span>
+        <button id="stage-next" class="icon" title="Следующий этап обучения" data-icon="chevronRight"></button>
+      </div>
+    </header>
+
+    <main id="stage-view">
+      <div id="viewport">
+        <canvas id="scene"></canvas>
+        <div id="camera-tools">
+          <div id="gizmo" title="Щелчок по оси задаёт вид, перетаскивание вращает камеру"></div>
+          <div class="group">
+            <button id="cam-ortho" class="projection" title="Сменить проекцию (5)">Перспектива</button>
+            <button id="cam-home" class="icon" title="Общий вид (0)" data-icon="home"></button>
+          </div>
+        </div>
+        <p id="camera-hint">Левая кнопка вращает камеру, правая сдвигает, колесо приближает</p>
+        <div id="empty" hidden></div>
+      </div>
+      <aside id="panel">
+        <div id="tabs" role="tablist">
+          <button id="tab-info" class="tab on" role="tab">Сведения</button>
+          <button id="tab-commands" class="tab" role="tab">Команды</button>
+        </div>
+        <div id="pane-info">
+          <section id="ship-info"></section>
+          <section id="factions"></section>
+          <section id="robot"></section>
+          <section>
+            <h2>Обозначения</h2>
+            <ul id="legend"></ul>
+          </section>
+        </div>
+        <div id="pane-commands" hidden>
+          <section>
+            <h2>Анимация камеры</h2>
+            <div class="command-row">
+              <button id="orbit" class="primary-text" title="Начать или остановить вращение вокруг центра карты (R)"></button>
+              <select id="orbit-rate" aria-label="Скорость вращения"></select>
+            </div>
+            <button id="pin-camera" class="ghost wide" title="Запомнить текущий вид с этого такта (P)"></button>
+            <label class="check"><input id="follow" type="checkbox" checked /> Камера следует за командами</label>
+            <p class="note">Камера начинает с вида, сохранённого в первой команде. Если подвинуть её вручную, слежение выключится.</p>
+          </section>
+          <section>
+            <h2>Действия</h2>
+            <div id="command-list"></div>
+          </section>
+        </div>
+      </aside>
+    </main>
+
+    <footer id="transport">
+      <div id="timeline">
+        <input id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Такт" />
+        <span id="tick" class="readout"></span>
+      </div>
+      <div id="tools">
+        <div class="group">
+          <button id="to-start" class="icon" title="В начало" data-icon="skipBack"></button>
+          <button id="step-back" class="icon" title="Такт назад (←)" data-icon="previous"></button>
+          <button id="play" class="icon primary" title="Пуск и пауза (пробел)" data-icon="playFilled"></button>
+          <button id="step-next" class="icon" title="Такт вперёд (→)" data-icon="next"></button>
+          <button id="to-end" class="icon" title="В конец" data-icon="skipForward"></button>
+        </div>
+        <label class="field">Скорость
+          <select id="speed"></select>
+        </label>
+        <div class="group">
+          <button id="icons" class="toggle on" title="Значки над объектами (H)"></button>
+          <button id="vision" class="toggle on" title="Зоны обзора фракций (V)"></button>
+          <button id="smooth" class="toggle on" title="Плавное движение между тактами (I)"></button>
+        </div>
+        <span class="spacer"></span>
+        <label class="field">Качество
+          <select id="quality">
+            <option value="720">720p</option>
+            <option value="1080" selected>1080p</option>
+            <option value="1440">1440p</option>
+          </select>
+        </label>
+        <div class="group">
+          <button id="shot" class="ghost" title="Снимок кадра (S)"></button>
+          <button id="export" class="ghost" title="Видео MP4 с текущей камерой и настройками (M)"></button>
+          <button id="folder" class="icon" title="Папка реплея (O)" data-icon="folder"></button>
+        </div>
+      </div>
+    </footer>
+
+    <div id="toast" role="status" hidden></div>
+    <div id="modal" hidden>
+      <div class="dialog">
+        <h2>Экспорт видео</h2>
+        <p id="modal-text"></p>
+        <div class="progress"><div id="modal-bar"></div></div>
+        <button id="modal-cancel" class="ghost">Отмена</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

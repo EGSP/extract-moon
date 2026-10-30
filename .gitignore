@@ -21,3 +21,9 @@ Thumbs.db
 
 # Ярлык проводника запусков: пути внутри него зависят от машины
 *.lnk
+
+# Проигрыватель на Tauri
+player/node_modules/
+player/dist/
+player/src-tauri/target/
+player/src-tauri/gen/

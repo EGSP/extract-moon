@@ -1,15 +1,16 @@
-"""Командная строка: extract-moon train | runs | explorer | watch | plot | record | view | gif."""
+"""Командная строка: extract-moon train | runs | explorer | watch | plot | record | view | player | gif | video."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 from .config import Config
-from .paths import REPLAYS_DIR, RUNS_DIR
+from .paths import PLAYER_EXE, REPLAYS_DIR, RUNS_DIR
 
 
 def resolve_checkpoint(value: str | None) -> Path | None:
@@ -25,6 +26,14 @@ def resolve_checkpoint(value: str | None) -> Path | None:
     if ck.exists():
         return ck
     raise FileNotFoundError(f"чекпойнт не найден: {value}")
+
+
+def open_player(target: Path) -> None:
+    if not target.exists():
+        raise FileNotFoundError(f"реплеи не найдены: {target}")
+    if not PLAYER_EXE.exists():
+        raise FileNotFoundError(f"новый плеер не собран: {PLAYER_EXE}. Сборка описана в player/README.md")
+    subprocess.Popen([str(PLAYER_EXE), str(target)])
 
 
 def list_runs() -> None:
@@ -76,6 +85,7 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--greedy", action="store_true", help="выбирать самое вероятное действие")
     r.add_argument("--device", default="auto", help="cpu, cuda или auto")
     r.add_argument("--view", action="store_true", help="открыть записанный матч в проигрывателе")
+    r.add_argument("--player", action="store_true", help="открыть записанный матч в новом плеере")
 
     w = sub.add_parser("watch", help="живые графики обучения (одного или нескольких запусков)")
     w.add_argument("runs", nargs="+", help="имена запусков в data/runs или пути к ним")
@@ -89,11 +99,21 @@ def main(argv: list[str] | None = None) -> None:
     v.add_argument("replay", help="файл .jsonl.gz, папка или имя запуска")
     v.add_argument("--cell", type=int, default=None, help="размер клетки; по умолчанию — под размер экрана")
 
+    pl = sub.add_parser("player", help="открыть реплей, папку реплеев или все этапы запуска в новом плеере")
+    pl.add_argument("replay", help="файл .jsonl.gz, папка или имя запуска")
+
     g = sub.add_parser("gif", help="экспортировать реплей в GIF")
     g.add_argument("replay", type=Path)
     g.add_argument("--out", type=Path, default=None)
     g.add_argument("--cell", type=int, default=20)
     g.add_argument("--fps", type=int, default=8)
+
+    vd = sub.add_parser("video", help="экспортировать реплей в MP4 (только карта, плавное движение)")
+    vd.add_argument("replay", type=Path)
+    vd.add_argument("--out", type=Path, default=None)
+    vd.add_argument("--cell", type=int, default=20)
+    vd.add_argument("--speed", type=float, default=2, help="тактов в секунду, как в проигрывателе")
+    vd.add_argument("--fps", type=int, default=30)
 
     a = ap.parse_args(argv)
     if a.cmd == "train":
@@ -126,6 +146,11 @@ def main(argv: list[str] | None = None) -> None:
             from .viewer import run_viewer
 
             run_viewer(out)
+        if a.player:
+            open_player(out)
+    elif a.cmd == "player":
+        target = Path(a.replay)
+        open_player(target if target.exists() else RUNS_DIR / a.replay)
     elif a.cmd == "view":
         from .viewer import run_viewer
 
@@ -146,6 +171,11 @@ def main(argv: list[str] | None = None) -> None:
 
         out = a.out or a.replay.with_suffix("").with_suffix(".gif")
         print(f"GIF: {export_gif(a.replay, out, a.cell, a.fps)}")
+    elif a.cmd == "video":
+        from .viewer import export_video
+
+        out = a.out or a.replay.with_suffix("").with_suffix(".mp4")
+        print(f"видео: {export_video(a.replay, out, a.cell, a.speed, a.fps)}")
 
 
 if __name__ == "__main__":

@@ -13,14 +13,16 @@ import random
 import re
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import messagebox, ttk
 
 from . import provenance
 from .metrics_view import ema, load_metrics
-from .paths import DATA_DIR, RUNS_DIR
+from .paths import DATA_DIR, PLAYER_EXE, RUNS_DIR
 
 REFRESH_MS = 10_000
 # Доля взлётов по меньшему числу матчей слишком шумная: в начале запуска это 1-2 матча.
@@ -99,8 +101,9 @@ class Explorer:
         right = ttk.Frame(main)
         buttons = ttk.Frame(right)
         buttons.pack(fill="x")
-        for text, cmd in (("Матчи", self.open_replays), ("Графики", self.open_metrics),
-                          ("Сравнить с родителем", self.compare), ("Папка", self.open_folder)):
+        for text, cmd in (("Матчи", self.open_replays), ("Новый плеер", self.open_player), ("Графики", self.open_metrics),
+                          ("Сравнить с родителем", self.compare), ("Папка", self.open_folder),
+                          ("Визуализатор", self.open_visualizer)):
             ttk.Button(buttons, text=text, command=cmd).pack(side="left", padx=(0, 6))
         models = ttk.LabelFrame(right, text="Сохранённые модели", padding=6)
         models.pack(fill="x", pady=(8, 0))
@@ -133,6 +136,7 @@ class Explorer:
         main.add(right, weight=2)
 
         self.runs: dict[str, dict] = {}
+        self.visualizer_url: str | None = None
         self.tick()
 
     def tick(self):
@@ -372,6 +376,25 @@ class Explorer:
             return
         launch("view", str(r["dir"]))
 
+    def open_player(self):
+        """Матч выбранной модели, а без выбранной модели — последний этап запуска."""
+        r = self.need()
+        if not r:
+            return
+        if not PLAYER_EXE.exists():
+            messagebox.showinfo("Extract Moon", "Новый плеер не собран. Команда сборки — в player/README.md.")
+            return
+        sel = self.selected_checkpoint()
+        if sel and sel[1] in r["stages"]:
+            launch("player", str(r["stages"][sel[1]]))
+        elif sel:  # у модели нет матча этапа: записываем новый, на CPU, как «Сыграть новый матч»
+            launch("record", "--checkpoint", str(sel[2]), "--seed", str(random.randint(0, 99_999)),
+                   "--device", "cpu", "--player")
+        elif list((r["dir"] / "replays").glob("*.jsonl.gz")):
+            launch("player", str(r["dir"]))
+        else:
+            messagebox.showinfo("Extract Moon", "У этого запуска пока нет записанных матчей.")
+
     def open_metrics(self):
         r = self.need()
         if r:
@@ -391,6 +414,16 @@ class Explorer:
         r = self.need()
         if r:
             self.open_path(r["dir"])
+
+    def open_visualizer(self):
+        # Сервер живёт в потоке проводника и запускается один раз; повторное нажатие открывает ту же страницу.
+        if self.visualizer_url is None:
+            from .model_viewer import make_server
+
+            server = make_server()
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.visualizer_url = f"http://127.0.0.1:{server.server_port}/"
+        webbrowser.open(self.visualizer_url)
 
     @staticmethod
     def open_path(path):

@@ -6,3 +6,4 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
 RUNS_DIR = DATA_DIR / "runs"
 REPLAYS_DIR = DATA_DIR / "replays"
+PLAYER_EXE = PROJECT_ROOT / "player" / "src-tauri" / "target" / "release" / "extract-moon-player.exe"
