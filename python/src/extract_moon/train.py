@@ -55,9 +55,16 @@ def sample_actions(out: dict, obs_t: dict):
     return actions, logp, dists
 
 
-def save_checkpoint(path: Path, model: Policy, cfg: Config, vec_dim: int, update: int, steps: int) -> None:
-    torch.save({"model": model.state_dict(), "config": cfg.to_dict(), "vec_dim": vec_dim,
-                "update": update, "steps": steps}, path)
+def save_checkpoint(path: Path, model: Policy, cfg: Config, vec_dim: int, update: int, steps: int,
+                    opt: torch.optim.Optimizer | None = None) -> None:
+    ck = {"model": model.state_dict(), "config": cfg.to_dict(), "vec_dim": vec_dim, "update": update, "steps": steps}
+    if opt is not None:
+        # Без состояния Adam продолжение начинается с обнулённых средних градиентов и в первые
+        # обновления делает слишком крупные шаги; генераторы случайных чисел — для повторяемости.
+        ck["optimizer"] = opt.state_dict()
+        ck["rng"] = {"torch": torch.get_rng_state(),
+                     "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None}
+    torch.save(ck, path)
 
 
 def load_checkpoint(path: Path, device) -> tuple[Policy, Config, dict]:
@@ -84,13 +91,25 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
     model = Policy(cfg, env.vec_dim).to(device)
     start_update, total_steps = 0, 0
     parent = None
+    opt = torch.optim.Adam(model.parameters(), lr=tc.lr, eps=1e-5)
+    warmup = 0
     if resume:
         ck = torch.load(resume, map_location=device, weights_only=False)
         model.load_state_dict(ck["model"])
         start_update, total_steps = ck["update"], ck["steps"]
         parent = {"checkpoint": str(resume), "run": Path(resume).parent.parent.name, "update": ck["update"]}
+        if "optimizer" in ck:
+            opt.load_state_dict(ck["optimizer"])
+            for g in opt.param_groups:
+                g["lr"] = tc.lr
+            torch.set_rng_state(ck["rng"]["torch"].cpu())
+            if ck["rng"]["cuda"] is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all([s.cpu() for s in ck["rng"]["cuda"]])
+        else:
+            # Старый чекпойнт без состояния оптимизатора: шаг обучения плавно растёт до lr.
+            warmup = tc.resume_warmup
+            print(f"в чекпойнте нет состояния оптимизатора, разгон шага обучения за {warmup} обновлений")
     provenance.start(run_dir, RULES_VERSION, note, parent)
-    opt = torch.optim.Adam(model.parameters(), lr=tc.lr, eps=1e-5)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"устройство: {device}, параметров: {n_params / 1e6:.2f} млн, потоков: {B}, запуск: {run_dir}")
 
@@ -115,6 +134,9 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
     row = {}
     for update in range(start_update + 1, tc.total_updates + 1):
         t0 = time.time()
+        if warmup:
+            for g in opt.param_groups:
+                g["lr"] = tc.lr * min(1.0, (update - start_update) / warmup)
         init_state = state.clone()
         buf = {k: [] for k in ("grid", "vec", "main_mask", "upg_mask", "active", "acting", "new_slot",
                                "main", "upg", "sym", "val", "logp", "value", "reward", "done")}
@@ -223,10 +245,10 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
                   f"взлёт {row.get('launch_rate', 0):.2f} | заряд {row.get('charge_frac', 0):.2f} | "
                   f"пассажиров {row.get('passengers', 0):.1f} | убийств {row.get('kills', 0):.1f}")
         if update % tc.save_every == 0 or update == tc.total_updates:
-            save_checkpoint(ck_dir / f"model_{update:06d}.pt", model, cfg, env.vec_dim, update, total_steps)
-            save_checkpoint(ck_dir / "latest.pt", model, cfg, env.vec_dim, update, total_steps)
+            save_checkpoint(ck_dir / f"model_{update:06d}.pt", model, cfg, env.vec_dim, update, total_steps, opt)
+            save_checkpoint(ck_dir / "latest.pt", model, cfg, env.vec_dim, update, total_steps, opt)
         if tc.replay_every and (update % tc.replay_every == 0 or update == tc.total_updates):
-            snapshot_replay(run_dir, ck_dir, model, cfg, env.vec_dim, update, total_steps)
+            snapshot_replay(run_dir, ck_dir, model, cfg, env.vec_dim, update, total_steps, opt)
 
     metrics_file.close()
     provenance.finish(run_dir, row)
@@ -234,13 +256,13 @@ def train(cfg: Config, run_name: str, resume: Path | None = None, note: str = ""
 
 
 def snapshot_replay(run_dir: Path, ck_dir: Path, model: Policy, cfg: Config, vec_dim: int,
-                    update: int, steps: int) -> None:
+                    update: int, steps: int, opt: torch.optim.Optimizer | None = None) -> None:
     """Сохраняет чекпойнт этапа и записывает матч на постоянной карте replay_seed."""
     from .replay import record_episode
 
     ck = ck_dir / f"model_{update:06d}.pt"
     if not ck.exists():
-        save_checkpoint(ck, model, cfg, vec_dim, update, steps)
+        save_checkpoint(ck, model, cfg, vec_dim, update, steps, opt)
     seed = cfg.train.replay_seed
     out = run_dir / "replays" / f"u{update:06d}_seed{seed}.jsonl.gz"
     # Реплей пишется на CPU: второй копии модели и её буферам не хватит места в 2 ГБ видеопамяти.
