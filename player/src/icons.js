@@ -27,7 +27,9 @@ import video from "@carbon/icons/es/video/32.js";
 import view from "@carbon/icons/es/view/32.js";
 import activity from "@carbon/icons/es/activity/32.js";
 import home from "@carbon/icons/es/home/32.js";
+import location from "@carbon/icons/es/location/32.js";
 import pin from "@carbon/icons/es/pin/32.js";
+import compass from "@carbon/icons/es/compass/32.js";
 import rotate from "@carbon/icons/es/rotate/32.js";
 import starFilled from "@carbon/icons/es/star--filled/32.js";
 import stopFilled from "@carbon/icons/es/stop--filled--alt/32.js";
@@ -38,7 +40,7 @@ const ICONS = {
   seat,
   asleep, batteryCharging, bot, closeLarge, fire, flash, flashFilled, addLarge, login, logout, radio, rocket, share,
   camera, chevronLeft, chevronRight, folder, pauseFilled, playFilled, previous, next, skipBack,
-  skipForward, video, view, activity, home, pin, rotate, starFilled, stopFilled, trash,
+  skipForward, video, view, activity, home, location, compass, pin, rotate, starFilled, stopFilled, trash,
 };
 
 export const FACTIONS = ["#fa4d56", "#4589ff", "#f1c21b", "#a56eff"];

@@ -30,20 +30,20 @@ export class Commands {
   }
 
   get recording() {
-    return this.list.find((c) => c.type === "orbit" && c.end === null) ?? null;
+    return this.list.find((c) => c.type !== "pin" && c.end === null) ?? null;
   }
 
   get enabled() {
     return this.list.filter((c) => c.enabled).sort((a, b) => a.start - b.start);
   }
 
-  add(type, tick, camera, rate = 0) {
-    this.list.push({ id: this.nextId++, type, enabled: true, start: tick, end: null, rate, camera });
+  add(type, tick, camera, extra = {}) {
+    this.list.push({ id: this.nextId++, type, enabled: true, start: tick, end: null, rate: 0, camera, ...extra });
     this.follow = true;
     this.save();
   }
 
-  /** Завершает вращение. Если такты не сдвинулись, команда ничего не делает и удаляется. */
+  /** Завершает идущее действие. Если такты не сдвинулись, команда ничего не делает и удаляется. */
   stop(tick) {
     const c = this.recording;
     if (!c) return;
@@ -69,6 +69,6 @@ export class Commands {
     if (!on.length) return null;
     const cur = on.filter((c) => c.start <= tick).pop() ?? on[0];
     const t = Math.min(Math.max(tick, cur.start), cur.end ?? Infinity);
-    return { camera: cur.camera, angle: ((cur.rate * (t - cur.start)) / speed) * DEG };
+    return { command: cur, tick: t, angle: ((cur.rate * (t - cur.start)) / speed) * DEG };
   }
 }

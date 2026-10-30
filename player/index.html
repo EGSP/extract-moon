@@ -51,7 +51,10 @@
               <button id="orbit" class="primary-text" title="Начать или остановить вращение вокруг центра карты (R)"></button>
               <select id="orbit-rate" aria-label="Скорость вращения"></select>
             </div>
+            <button id="follow-plain" class="ghost wide" title="Камера едет за роботом и не поворачивается (F)"></button>
+            <button id="follow-turn" class="ghost wide" title="Камера едет за роботом и поворачивается в сторону его движения (G)"></button>
             <button id="pin-camera" class="ghost wide" title="Запомнить текущий вид с этого такта (P)"></button>
+            <p id="arm-hint" class="note" hidden>Нажмите на робота в сцене. Расстояние камеры возьмётся из текущего вида.</p>
             <label class="check"><input id="follow" type="checkbox" checked /> Камера следует за командами</label>
             <p class="note">Камера начинает с вида, сохранённого в первой команде. Если подвинуть её вручную, слежение выключится.</p>
           </section>

@@ -20,6 +20,9 @@ const FX_Y = 0.55; // высота снарядов и лучей
 const FX_ORDER = 200000; // эффекты боя рисуются поверх всех значков
 const HOME = new THREE.Vector3(0.62, 1, 0.82).normalize();
 const UP = new THREE.Vector3(0, 1, 0);
+// Окна сглаживания камеры в тактах: робот ходит рывками от клетки к клетке.
+const TRACK_WINDOW = 0.5;
+const YAW_WINDOW = 1.5;
 
 function random(seed) {
   let s = seed >>> 0;
@@ -78,8 +81,14 @@ export class World {
     this.options = { vision: true, icons: true };
     this.selected = null;
     this.dirty = true;
-    this.controls.addEventListener("change", () => { this.dirty = true; });
-    this.controls.addEventListener("start", () => this.onUserCamera?.());
+    let interacting = false;
+    this.controls.addEventListener("start", () => { interacting = true; });
+    this.controls.addEventListener("end", () => { interacting = false; });
+    // Щелчок по роботу тоже начинает жест, поэтому ручным считается только реальный сдвиг камеры.
+    this.controls.addEventListener("change", () => {
+      this.dirty = true;
+      if (interacting && !this.applying) this.onUserCamera?.();
+    });
     this.addLights();
     this.addStars();
   }
@@ -823,16 +832,66 @@ export class World {
     this.setView(HOME);
   }
 
-  /** Ставит камеру в сохранённый вид, повёрнутый на angle вокруг вертикали через центр карты.
-   *  Цель поворачивается вместе с камерой, поэтому расстояние и наклон не меняются. */
-  applyCamera(state, angle = 0) {
+  /** Ставит камеру в сохранённый вид, повёрнутый на angle вокруг вертикали через точку from.
+   *  Точка from переносится в to. Цель движется вместе с камерой, поэтому расстояние и наклон не меняются. */
+  applyCamera(state, angle = 0, from = this.center, to = from) {
+    this.applying = true;
     this.setOrthographic(state.projection === "orthographic");
-    const turn = (v) => new THREE.Vector3(...v).sub(this.center).applyAxisAngle(UP, angle).add(this.center);
+    const turn = (v) => new THREE.Vector3(...v).sub(from).applyAxisAngle(UP, angle).add(to);
     this.camera.position.copy(turn(state.position));
     this.controls.target.copy(turn(state.target));
     if (this.camera.isOrthographicCamera) this.setOrthoView(state.viewHeight);
     this.controls.update();
+    this.applying = false;
     this.dirty = true;
+  }
+
+  /** Камера над роботом: цель сохранённого вида переносится на робота. */
+  followRobot(state, id, tick, startYaw, rotate) {
+    const point = this.smoothPoint(id, tick);
+    const to = new THREE.Vector3(point[0], state.target[1], point[1]);
+    const angle = rotate ? this.smoothYaw(id, tick) - startYaw : 0;
+    this.applyCamera(state, angle, new THREE.Vector3(...state.target), to);
+  }
+
+  /** Где робот на дробном такте. Погибший или севший в корабль остаётся в последней известной точке. */
+  robotPoint(id, tick) {
+    const { layout } = this.rep;
+    const last = layout.length - 1;
+    const idx = Math.min(Math.max(Math.floor(tick), 0), last);
+    const here = this.bodyPosition(id, idx, Math.min(Math.max(tick - idx, 0), 1));
+    if (here) return here;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (layout[i].has(id)) return layout[i].get(id);
+    }
+    return [this.size / 2, this.size / 2];
+  }
+
+  smoothPoint(id, tick) {
+    let x = 0;
+    let z = 0;
+    const n = 9;
+    for (let i = 0; i < n; i++) {
+      const [px, pz] = this.robotPoint(id, tick + TRACK_WINDOW * (2 * i / (n - 1) - 1));
+      x += px;
+      z += pz;
+    }
+    return [x / n, z / n];
+  }
+
+  /** Направление робота, усреднённое по окну: так камера не дёргается при каждом развороте. */
+  smoothYaw(id, tick) {
+    const { yaw } = this.rep;
+    let s = 0;
+    let c = 0;
+    const n = 13;
+    for (let i = 0; i < n; i++) {
+      const t = tick + YAW_WINDOW * (2 * i / (n - 1) - 1);
+      const a = yaw[Math.min(Math.max(Math.floor(t), 0), yaw.length - 1)].get(id) ?? 0;
+      s += Math.sin(a);
+      c += Math.cos(a);
+    }
+    return Math.atan2(s, c);
   }
 
   /** Вид вдоль оси гизмо. Горизонтальный вид чуть приподнят: камера не опускается под грунт. */

@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id);
 const canvas = $("scene");
 const world = new World(canvas);
 const commands = new Commands();
-const state = { rep: null, list: [], tick: 0, playing: false, speed: 0, smooth: true, exporting: false, shownIdx: -1 };
+const state = { rep: null, list: [], tick: 0, playing: false, speed: 0, smooth: true, exporting: false, shownIdx: -1, arming: null };
 
 const lastFrame = () => state.rep.frames.length - 1;
 const maxTick = () => lastFrame() + (state.rep.header.result?.launched ? LAUNCH_TAIL : 0);
@@ -173,7 +173,10 @@ function showPanels() {
 
 function followCommands(tick) {
   const pose = commands.pose(tick, SPEEDS[state.speed]);
-  if (pose) world.applyCamera(pose.camera, pose.angle);
+  if (!pose) return;
+  const c = pose.command;
+  if (c.type === "follow") world.followRobot(c.camera, c.robot, pose.tick, c.yaw, c.rotate);
+  else world.applyCamera(c.camera, pose.angle);
 }
 
 function draw() {
@@ -210,6 +213,8 @@ const ACTIONS_BY_NAME = {
   ortho() { setOrtho(!world.camera.isOrthographicCamera); },
   orbit() { showTab("commands"); toggleOrbit(); },
   pin() { showTab("commands"); pinCamera(); },
+  followPlain() { showTab("commands"); toggleFollow(false); },
+  followTurn() { showTab("commands"); toggleFollow(true); },
 };
 
 function setSpeed(i) {
@@ -327,6 +332,7 @@ async function exportVideo() {
 
 function commandTitle(c) {
   if (c.type === "pin") return "Вид камеры";
+  if (c.type === "follow") return `За роботом #${c.robot}${c.rotate ? ", с поворотом" : ""}`;
   const sign = c.rate < 0 ? "−" : "";
   return `Вращение ${sign}${Math.abs(c.rate)}°/с`;
 }
@@ -334,11 +340,20 @@ function commandTitle(c) {
 function showCommands() {
   const active = commands.recording;
   const orbit = $("orbit");
-  orbit.classList.toggle("recording", !!active);
-  orbit.innerHTML = active
+  const orbiting = active?.type === "orbit";
+  orbit.classList.toggle("recording", orbiting);
+  orbit.innerHTML = orbiting
     ? `${iconSvg("stopFilled", 16)}<span>Остановить вращение</span>`
     : `${iconSvg("rotate", 16)}<span>Начать вращение</span>`;
   $("follow").checked = commands.follow;
+  for (const [id, rotate, icon, text] of [["follow-plain", false, "location", "Следовать за роботом"], ["follow-turn", true, "compass", "Следовать с поворотом"]]) {
+    const live = active?.type === "follow" && active.rotate === rotate;
+    const button = $(id);
+    button.classList.toggle("recording", live);
+    button.classList.toggle("armed", state.arming === rotate);
+    button.innerHTML = `${iconSvg(live ? "stopFilled" : icon, 16)}<span>${live ? "Остановить следование" : text}</span>`;
+  }
+  $("arm-hint").hidden = state.arming === null;
   $("tab-commands").textContent = commands.list.length ? `Команды (${commands.list.length})` : "Команды";
   const rows = [...commands.list].sort((a, b) => a.start - b.start).map((c) => `
     <tr data-id="${c.id}" class="${c.enabled ? "" : "off"} ${c === active ? "live" : ""}">
@@ -360,17 +375,42 @@ function showCommands() {
 
 function toggleOrbit() {
   if (!state.rep) return;
-  if (commands.recording) {
-    commands.stop(state.tick);
-  } else {
-    commands.add("orbit", state.tick, world.cameraState(), Number($("orbit-rate").value));
+  state.arming = null;
+  const wasOrbit = commands.recording?.type === "orbit";
+  commands.stop(state.tick);
+  if (!wasOrbit) {
+    commands.add("orbit", state.tick, world.cameraState(), { rate: Number($("orbit-rate").value) });
     if (!state.playing && state.tick < maxTick()) setPlaying(true);
   }
   showCommands();
 }
 
+/** Без выбранного робота кнопка ждёт щелчка по нему в сцене. */
+function toggleFollow(rotate) {
+  if (!state.rep) return;
+  const live = commands.recording;
+  if (live?.type === "follow" && live.rotate === rotate) {
+    commands.stop(state.tick);
+  } else {
+    const alive = state.rep.frames[frameIndex()].robots.some((r) => r.id === world.selected && r.status !== "boarded");
+    if (alive) startFollow(world.selected, rotate);
+    else state.arming = state.arming === rotate ? null : rotate;
+  }
+  showCommands();
+}
+
+function startFollow(robot, rotate) {
+  state.arming = null;
+  commands.stop(state.tick);
+  const yaw = world.smoothYaw(robot, state.tick);
+  commands.add("follow", state.tick, world.cameraState(), { robot, rotate, yaw });
+  if (!state.playing && state.tick < maxTick()) setPlaying(true);
+  draw();
+}
+
 function pinCamera() {
   if (!state.rep) return;
+  state.arming = null;
   commands.stop(state.tick);
   commands.add("pin", state.tick, world.cameraState());
   showCommands();
@@ -403,6 +443,8 @@ function bindUi() {
   $("tab-commands").onclick = () => showTab("commands");
   $("orbit").onclick = toggleOrbit;
   $("pin-camera").onclick = pinCamera;
+  $("follow-plain").onclick = () => toggleFollow(false);
+  $("follow-turn").onclick = () => toggleFollow(true);
   $("pin-camera").innerHTML = `${iconSvg("pin", 16)}<span>Запомнить вид</span>`;
   $("orbit-rate").innerHTML = ORBIT_RATES.flatMap((v) => [v, -v])
     .map((v) => `<option value="${v}"${v === 10 ? " selected" : ""}>${v > 0 ? "↻" : "↺"} ${Math.abs(v)}°/с</option>`).join("");
@@ -443,13 +485,17 @@ function bindUi() {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5 || e.button !== 0 || !state.rep) return;
     const box = canvas.getBoundingClientRect();
     world.selected = world.pick(e.clientX - box.left, e.clientY - box.top);
+    if (state.arming !== null && world.selected !== null) {
+      startFollow(world.selected, state.arming);
+      showCommands();
+    }
     state.shownIdx = -1;
     draw();
   });
 
   const keys = {
     " ": "play", ArrowLeft: "prev", ArrowRight: "next", ArrowUp: "faster", ArrowDown: "slower", v: "vision", h: "icons",
-    i: "smooth", s: "shot", m: "video", o: "folder", 5: "ortho", r: "orbit", p: "pin",
+    i: "smooth", s: "shot", m: "video", o: "folder", 5: "ortho", r: "orbit", p: "pin", f: "followPlain", g: "followTurn",
   };
   window.addEventListener("keydown", (e) => {
     if (state.exporting || e.target.tagName === "SELECT") return;
