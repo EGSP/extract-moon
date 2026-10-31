@@ -9,6 +9,7 @@ data/runs/*
 !data/runs/.gitkeep
 data/replays/*
 !data/replays/.gitkeep
+data/videos/
 
 # Godot
 godot/.godot/
@@ -35,7 +36,7 @@ explorer_app/src-tauri/target/
 explorer_app/src-tauri/gen/
 
 # Справочник архитектур на Tauri
-models_app/node_modules/
+node_modules/
 models_app/dist/
 models_app/src-tauri/target/
 models_app/src-tauri/gen/

@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from ..paths import MODELS_DIST, MODELS_EXE
+from ..paths import MODELS_DIST, MODELS_EXE, VIDEOS_DIR
 
 
 class Server(ThreadingHTTPServer):
@@ -109,7 +109,7 @@ def run_app(port: int = 0, window: bool = True) -> None:
     try:
         if window:
             threading.Thread(target=server.serve_forever, daemon=True).start()
-            env = {**os.environ, "EXTRACT_MOON_API": address, "EXTRACT_MOON_TOKEN": token}
+            env = {**os.environ, "EXTRACT_MOON_API": address, "EXTRACT_MOON_TOKEN": token, "EXTRACT_MOON_OUT": str(VIDEOS_DIR)}
             subprocess.run([str(MODELS_EXE)], env=env, stdin=subprocess.DEVNULL, check=False)
             server.shutdown()
         else:

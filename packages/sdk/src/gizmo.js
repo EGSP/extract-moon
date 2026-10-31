@@ -4,17 +4,23 @@ import * as THREE from "three";
 
 const SIZE = 112;
 const REACH = 38;
-const AXES = [
-  { name: "X", dir: [1, 0, 0], color: "#fa4d56" },
-  { name: "Y", dir: [0, 1, 0], color: "#42be65" },
-  { name: "Z", dir: [0, 0, 1], color: "#4589ff" },
-  { name: "", dir: [-1, 0, 0], color: "#fa4d56" },
-  { name: "", dir: [0, 0, -1], color: "#4589ff" },
+const COLORS = { x: "#fa4d56", y: "#42be65", z: "#4589ff" };
+export const AXES = [
+  { name: "X", dir: [1, 0, 0], axis: "x" },
+  { name: "Y", dir: [0, 1, 0], axis: "y" },
+  { name: "Z", dir: [0, 0, 1], axis: "z" },
+  { name: "", dir: [-1, 0, 0], axis: "x" },
+  { name: "", dir: [0, -1, 0], axis: "y" },
+  { name: "", dir: [0, 0, -1], axis: "z" },
 ];
 
 export class Gizmo {
-  constructor(el, world) {
-    this.world = world;
+  /** view даёт camera, orbit(dx, dy) и viewAlong(x, y, z). draw() окно вызывает после каждого кадра. */
+  constructor(el, view, { axes = AXES, colors = COLORS } = {}) {
+    this.view = view;
+    this.axes = axes;
+    this.colors = colors;
+    el.classList.add("axis-gizmo");
     el.innerHTML = `<svg viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}"></svg>`;
     this.svg = el.firstChild;
     this.key = "";
@@ -31,30 +37,29 @@ export class Gizmo {
       drag.moved = true;
       drag.x = e.clientX;
       drag.y = e.clientY;
-      world.orbit(dx, dy);
+      view.orbit(dx, dy);
     });
     el.addEventListener("pointerup", () => {
-      if (drag && !drag.moved && drag.axis !== undefined) world.viewAlong(...AXES[drag.axis].dir);
+      if (drag && !drag.moved && drag.axis !== undefined) view.viewAlong(...axes[drag.axis].dir);
       drag = null;
     });
-    world.onRender = () => this.draw();
   }
 
   draw() {
-    const q = this.world.camera.quaternion.clone().invert();
+    const q = this.view.camera.quaternion.clone().invert();
     const key = q.toArray().map((v) => v.toFixed(3)).join();
     if (key === this.key) return;
     this.key = key;
     const c = SIZE / 2;
-    const items = AXES.map((a, i) => {
+    const items = this.axes.map((a, i) => {
       const v = new THREE.Vector3(...a.dir).applyQuaternion(q);
-      return { ...a, i, x: c + v.x * REACH, y: c - v.y * REACH, z: v.z };
+      return { ...a, i, x: c + v.x * REACH, y: c - v.y * REACH, z: v.z, color: this.colors[a.axis] };
     }).sort((a, b) => a.z - b.z);
     this.svg.innerHTML = items.map(({ name, color, i, x, y }) => {
       const line = name ? `<line x1="${c}" y1="${c}" x2="${x}" y2="${y}" stroke="${color}" stroke-width="2"/>` : "";
       const dot = name
         ? `<circle cx="${x}" cy="${y}" r="10" fill="${color}"/><text x="${x}" y="${y + 4}">${name}</text>`
-        : `<circle cx="${x}" cy="${y}" r="7" fill="#161616" stroke="${color}" stroke-width="2"/>`;
+        : `<circle class="hole" cx="${x}" cy="${y}" r="7" stroke="${color}"/>`;
       return `${line}<g data-axis="${i}">${dot}</g>`;
     }).join("");
   }

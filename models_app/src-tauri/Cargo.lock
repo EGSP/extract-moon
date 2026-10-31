@@ -939,10 +939,19 @@ dependencies = [
 name = "extract-moon-models"
 version = "0.1.0"
 dependencies = [
+ "extract-moon-shell",
  "serde",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+]
+
+[[package]]
+name = "extract-moon-shell"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
 ]
 
 [[package]]

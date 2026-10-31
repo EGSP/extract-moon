@@ -1,0 +1,8 @@
+[package]
+name = "extract-moon-shell"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }

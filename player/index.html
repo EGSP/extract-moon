@@ -97,27 +97,8 @@
           <button id="smooth" class="toggle on" title="Плавное движение между тактами (I)"></button>
         </div>
         <span class="spacer"></span>
-        <label class="field">Размер видео
-          <select id="quality">
-            <option value="window:720">Как окно, 720p</option>
-            <option value="window:1080" selected>Как окно, 1080p</option>
-            <option value="window:1440">Как окно, 1440p</option>
-            <option value="1920x1080">1920 × 1080</option>
-            <option value="1600x900">1600 × 900</option>
-            <option value="1280x720">1280 × 720</option>
-            <option value="1200x900">1200 × 900</option>
-            <option value="1200x676">1200 × 676</option>
-            <option value="1080x1080">1080 × 1080</option>
-            <option value="1080x1920">1080 × 1920</option>
-            <option value="custom">Свой размер</option>
-          </select>
-        </label>
-        <span id="custom-size" class="group" hidden>
-          <input id="custom-w" type="number" min="64" max="3840" step="2" value="1200" aria-label="Ширина видео" />
-          <span class="muted">×</span>
-          <input id="custom-h" type="number" min="64" max="2160" step="2" value="800" aria-label="Высота видео" />
-        </span>
-        <label id="legend-check" class="check" title="Модель, прогон и матч в углу ролика"><input id="legend" type="checkbox" checked />Легенда</label>
+        <span id="video-size"></span>
+        <label id="legend-check" class="check" title="Модель, прогон и матч в углу ролика"><input id="video-legend" type="checkbox" checked />Легенда</label>
         <div class="group">
           <button id="shot" class="ghost" title="Снимок кадра (S)"></button>
           <button id="export" class="ghost" title="Видео MP4 с текущей камерой и настройками (M)"></button>

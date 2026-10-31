@@ -6,11 +6,13 @@
 
 ## Сборка
 
-Нужны Node.js, Rust и MSVC. Команды выполняются из папки `explorer_app/`:
+Нужны Node.js, Rust и MSVC. Зависимости ставятся один раз из корня проекта, общий код лежит в `packages/`:
 
 ```bash
 npm install
 ```
+
+Сборка выполняется из папки `explorer_app/`:
 
 ```bash
 npm run tauri -- build --no-bundle

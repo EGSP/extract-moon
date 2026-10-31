@@ -4,15 +4,9 @@
 
 use std::path::Path;
 
-use serde::Serialize;
+use extract_moon_shell::Backend;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
-
-#[derive(Clone, Serialize)]
-struct Backend {
-    api: String,
-    token: String,
-}
 
 #[tauri::command]
 fn backend(state: State<Backend>) -> Backend {
@@ -34,11 +28,9 @@ fn pick_video(app: AppHandle, current: String) -> Option<String> {
 }
 
 fn main() {
-    let env = |key| std::env::var(key).unwrap_or_default();
-    let state = Backend { api: env("EXTRACT_MOON_API"), token: env("EXTRACT_MOON_TOKEN") };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(state)
+        .manage(Backend::from_env())
         .invoke_handler(tauri::generate_handler![backend, pick_video])
         .run(tauri::generate_context!())
         .expect("не удалось запустить окно проводника");

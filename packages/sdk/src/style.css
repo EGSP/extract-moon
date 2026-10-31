@@ -1,0 +1,14 @@
+/* Цвета гизмо задаёт окно: у плеера тёмная тема, у справочника светлая. */
+.axis-gizmo { width: 112px; height: 112px; border-radius: 50%; background: var(--gizmo-bg, #16161699); cursor: grab; touch-action: none; }
+.axis-gizmo:active { cursor: grabbing; }
+.axis-gizmo svg { display: block; }
+.axis-gizmo [data-axis] { cursor: pointer; }
+.axis-gizmo [data-axis]:hover circle { stroke: var(--gizmo-hover, #ffffff); stroke-width: 2; }
+.axis-gizmo .hole { fill: var(--gizmo-hole, #161616); stroke-width: 2; }
+.axis-gizmo text { font: 600 11px "IBM Plex Sans", sans-serif; fill: var(--gizmo-text, #161616); text-anchor: middle; pointer-events: none; }
+
+.video-size { display: inline-flex; align-items: center; gap: 8px; }
+.video-size-custom { display: inline-flex; align-items: center; gap: 6px; }
+.video-size-custom[hidden] { display: none; }
+.video-size-custom input { width: 72px; height: 40px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--border-strong, #8d8d8d);
+  background: var(--layer-2, #f4f4f4); color: var(--text, #161616); font: inherit; }

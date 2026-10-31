@@ -1,0 +1,5 @@
+{
+  "name": "extract-moon",
+  "private": true,
+  "workspaces": ["packages/sdk", "player", "explorer_app", "models_app"]
+}

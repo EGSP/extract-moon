@@ -1,21 +1,20 @@
-// Связь с сервисом на Python. В окне Tauri адрес и токен дают переменные окружения, в браузере адресная строка.
-import { invoke, isTauri } from "@tauri-apps/api/core";
+// Запросы к сервису и файлы результата. В окне ролик ложится в data/videos, в браузере скачивается.
+import { invoke } from "@tauri-apps/api/core";
+import { createBackend, inWindow } from "@extract-moon/sdk/backend";
 
-let base = "";
-let token = "";
+const { connect, request } = createBackend("extract-moon models");
 
-export async function connect() {
-  if (isTauri()) ({ api: base, token } = await invoke("backend"));
-  else token = new URLSearchParams(location.search).get("token") ?? "";
-  if (isTauri() && !base) throw new Error("Окно открыто без сервиса. Запустите справочник командой extract-moon models.");
-}
-
-async function request(path) {
-  const resp = await fetch(base + path, { headers: { "X-Token": token } });
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error ?? `ошибка ${resp.status}`);
-  return data;
-}
-
+export { connect };
 export const fetchCatalog = () => request("/api/catalog");
 export const fetchMemory = (name) => request(`/api/memory?run=${encodeURIComponent(name)}`);
+export const renderJob = () => (inWindow ? invoke("render_job") : Promise.resolve(null));
+export const finishJob = () => invoke("finish_job");
+
+export async function saveOutput(file, bytes) {
+  if (inWindow) return invoke("save_output", bytes, { headers: { "x-file": file } });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([bytes]));
+  link.download = file;
+  link.click();
+  return file;
+}

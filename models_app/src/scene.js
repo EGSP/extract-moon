@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { Gizmo } from '@extract-moon/sdk/gizmo';
 
 // Категориальная палитра Carbon для светлой темы.
 export const GROUP_COLORS = { input: '#009d9a', encoder: '#0f62fe', core: '#8a3ffc', heads: '#b28600' };
@@ -271,15 +272,12 @@ const COMPONENTS = {
 
 // ---------------------------------------------------------------- сцена
 
-const AXES = [
-  { name: 'X', dir: new THREE.Vector3(1, 0, 0), color: '#da1e28' },
-  { name: 'Y', dir: new THREE.Vector3(0, 1, 0), color: '#24a148' },
-  { name: 'Z', dir: new THREE.Vector3(0, 0, 1), color: '#0f62fe' },
-];
+const AXIS_COLORS = { x: '#da1e28', y: '#24a148', z: '#0f62fe' };
 // Движение камеры: [вправо, вверх, вперёд].
 const MOVE_KEYS = { KeyW: [0, 0, 1], KeyS: [0, 0, -1], KeyA: [-1, 0, 0], KeyD: [1, 0, 0], KeyE: [0, 1, 0], KeyQ: [0, -1, 0] };
 const FRAME_MS = 1000 / 30;  // анимация не чаще 30 кадров в секунду
 const UP = new THREE.Vector3(0, 1, 0);
+const LABEL_BASE = 900;  // при таком меньшем размере кадра подписи ролика равны экранным
 
 // Без видеокарты браузер рисует WebGL на процессоре и занимает все ядра, поэтому там нет теней.
 function softwareGL(renderer) {
@@ -335,9 +333,10 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
   selRing.rotation.x = -Math.PI / 2; selRing.position.y = 0.03; selRing.visible = false;
   scene.add(selRing);
 
-  let root = null, blocks = new Map(), edges = [], pickables = [], animated = [], plates = new Map();
+  let root = null, blocks = new Map(), edges = [], pickables = [], animated = [], plates = new Map(), groupInfo = {};
   let selGroup = null, hoverGroup = null;
   let hovered = null, selected = null, animate = false, fly = null, animT = 0, last = 0;
+  let labelsOn = true, flight = null, held = false, saved = null, renderSize = null;
   const keys = new Set();
 
   function clear() {
@@ -362,6 +361,7 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
 
   function show(inst, groups = {}) {
     clear();
+    groupInfo = groups;
     root = new THREE.Group();
     scene.add(root);
     for (const b of inst.blocks) {
@@ -381,7 +381,7 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
       lbl.element.addEventListener('pointerleave', () => setHover(null));
       obj.add(lbl);
       root.add(obj);
-      blocks.set(b.id, { b, obj, size, color });
+      blocks.set(b.id, { b, obj, size, color, lbl });
     }
     for (const e of inst.edges) addEdge(e);
     addPlates(groups);
@@ -450,7 +450,7 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
       plate.add(lbl);
       root.add(plate);
       pickables.push(plate);
-      plates.set(g, { plate, mat, frame, w, dz });
+      plates.set(g, { plate, mat, frame, w, dz, lbl, color, box: box.clone().expandByVector(new THREE.Vector3(pad, 0, pad)) });
     }
   }
 
@@ -487,20 +487,25 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
 
   function viewDir() { return camera.position.clone().sub(controls.target).normalize(); }
 
-  function overview(smooth = true) {
-    const box = bounds(), c = box.getCenter(new THREE.Vector3());
-    // Подбираем расстояние, при котором все углы рамки модели попадают в кадр с полями.
-    const dir = new THREE.Vector3(0.12, 0.72, 0.7).normalize(), cam = persp.clone(), p = new THREE.Vector3();
+  // Расстояние, при котором все углы рамки попадают в кадр с полями.
+  function fitDistance(box, dir, aspect, marginX = 0.92, marginY = 0.8) {
+    const c = box.getCenter(new THREE.Vector3()), cam = persp.clone(), p = new THREE.Vector3();
+    cam.aspect = aspect; cam.updateProjectionMatrix();
     const corners = [0, 1, 2, 3, 4, 5, 6, 7].map(i => new THREE.Vector3(
       i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z));
     let lo = 1, hi = 400;
     for (let k = 0; k < 30; k++) {
       const d = (lo + hi) / 2;
       cam.position.copy(c).addScaledVector(dir, d); cam.lookAt(c); cam.updateMatrixWorld();
-      const fits = corners.every(q => { p.copy(q).project(cam); return Math.abs(p.x) < 0.92 && Math.abs(p.y) < 0.8; });
+      const fits = corners.every(q => { p.copy(q).project(cam); return Math.abs(p.x) < marginX && Math.abs(p.y) < marginY; });
       if (fits) hi = d; else lo = d;
     }
-    flyTo(c, dir, hi, smooth ? 800 : 0);
+    return hi;
+  }
+
+  function overview(smooth = true) {
+    const box = bounds(), dir = new THREE.Vector3(0.12, 0.72, 0.7).normalize();
+    flyTo(box.getCenter(new THREE.Vector3()), dir, fitDistance(box, dir, persp.aspect), smooth ? 800 : 0);
   }
 
   // Вид вдоль оси: камера смотрит на цель со стороны dir.
@@ -644,42 +649,161 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
 
   // ------------------------------------------------ осевой гизмо
 
-  const gizmo = document.createElement('div');
-  gizmo.className = 'gizmo';
-  gizmo.innerHTML = '<svg viewBox="0 0 100 100" width="100" height="100"></svg>';
-  container.appendChild(gizmo);
-  const gsvg = gizmo.querySelector('svg');
-  gsvg.addEventListener('click', ev => {
-    const el = ev.target.closest('[data-axis]');
-    if (!el) return;
-    const a = AXES.find(x => x.name === el.dataset.axis[0]);
-    snap(a.dir.clone().multiplyScalar(el.dataset.axis[1] === '-' ? -1 : 1));
-  });
-  const inv = new THREE.Quaternion(), v = new THREE.Vector3();
-  function drawGizmo() {
-    inv.copy(camera.quaternion).invert();
-    const items = [];
-    for (const a of AXES) for (const sign of [1, -1]) {
-      v.copy(a.dir).multiplyScalar(sign).applyQuaternion(inv);
-      items.push({ a, sign, x: 50 + v.x * 34, y: 50 - v.y * 34, z: v.z });
+  const gizmoEl = document.createElement('div');
+  gizmoEl.className = 'gizmo';
+  gizmoEl.title = 'Щелчок по оси задаёт вид, перетаскивание вращает камеру';
+  container.appendChild(gizmoEl);
+  const spherical = new THREE.Spherical(), offset = new THREE.Vector3();
+  const gizmo = new Gizmo(gizmoEl, {
+    get camera() { return camera; },
+    viewAlong(x, y, z) { snap(new THREE.Vector3(x, y, z)); },
+    orbit(dx, dy) {
+      if (flight || held) return;
+      fly = null;
+      spherical.setFromVector3(offset.copy(camera.position).sub(controls.target));
+      spherical.theta -= dx * 0.01;
+      spherical.phi = THREE.MathUtils.clamp(spherical.phi - dy * 0.01, 0.02, Math.PI - 0.02);
+      camera.position.setFromSpherical(spherical).add(controls.target);
+      controls.update();
+      dirty = true;
+    },
+  }, { colors: AXIS_COLORS });
+
+  // ------------------------------------------------ пролёты и запись
+
+  function placeCamera({ target, dir, dist }) {
+    if (camera === ortho) {
+      ortho.position.copy(target).addScaledVector(dir, 150);
+      ortho.zoom = orthoH / (dist * tanHalf);
+      ortho.updateProjectionMatrix();
+    } else {
+      persp.position.copy(target).addScaledVector(dir, dist);
     }
-    items.sort((p, q) => p.z - q.z);
-    gsvg.innerHTML = items.map(({ a, sign, x, y }) => {
-      const id = a.name + (sign > 0 ? '+' : '-');
-      return sign > 0
-        ? `<line x1="50" y1="50" x2="${x}" y2="${y}" stroke="${a.color}" stroke-width="2"/>
-           <g data-axis="${id}"><title>Вид со стороны +${a.name}</title><circle cx="${x}" cy="${y}" r="10" fill="${a.color}"/>
-           <text x="${x}" y="${y + 4}" text-anchor="middle">${a.name}</text></g>`
-        : `<g data-axis="${id}"><title>Вид со стороны -${a.name}</title><circle cx="${x}" cy="${y}" r="7" fill="#fff" stroke="${a.color}" stroke-width="2"/></g>`;
-    }).join('');
+    camera.lookAt(target);
+    camera.updateMatrixWorld();
+    controls.target.copy(target);
+  }
+
+  // Анимация идёт от времени ролика, поэтому кадр можно получить в любой момент и в любом порядке.
+  function flightFrame(path, t) {
+    const at = path.at(t);
+    placeCamera(at);
+    if (at.group !== selGroup) { selGroup = at.group; paint(); }
+    animT = t;
+    animated.forEach(f => f(t));
+    edges.forEach(e => e.animate(t));
+    renderer.render(scene, camera);
+    return at;
+  }
+
+  function beginFlight(orthographic) {
+    saved = { ortho: camera === ortho, position: camera.position.clone(), target: controls.target.clone(), zoom: ortho.zoom,
+      orthoH, animate, selGroup, selected };
+    fly = null;
+    controls.enabled = false;
+    setProjection(orthographic);
+    selGroup = null; selected = null; selRing.visible = false; paint();
+    edges.forEach(e => { e.pts.visible = true; });
+  }
+
+  function endFlight() {
+    const s = saved;
+    saved = null;
+    setProjection(s.ortho);
+    orthoH = s.orthoH;
+    resize();
+    camera.position.copy(s.position);
+    controls.target.copy(s.target);
+    ortho.zoom = s.zoom;
+    ortho.updateProjectionMatrix();
+    controls.enabled = true;
+    controls.update();
+    animate = s.animate;
+    edges.forEach(e => { e.pts.visible = animate; });
+    selGroup = s.selGroup;
+    selected = s.selected;
+    selRing.visible = !!selected;
+    paint();
+  }
+
+  // Подписи сцены живут в DOM и на холст не попадают, поэтому в ролике они рисуются отдельно.
+  const place = new THREE.Vector3();
+  function screenOf(obj, w, h) {
+    place.setFromMatrixPosition(obj.matrixWorld).project(camera);
+    if (Math.abs(place.z) > 1) return null;
+    return [(place.x + 1) / 2 * w, (1 - place.y) / 2 * h];
+  }
+
+  function drawLabels(g, w, h) {
+    const s = Math.min(w, h) / LABEL_BASE;
+    g.save();
+    g.lineJoin = 'round';
+    g.textBaseline = 'middle';
+    g.font = `600 ${12 * s}px "IBM Plex Sans", sans-serif`;
+    for (const { lbl, color } of plates.values()) {
+      const at = screenOf(lbl, w, h);
+      if (!at) continue;
+      const text = lbl.element.textContent, boxW = g.measureText(text).width + 19 * s, boxH = 21 * s;
+      g.fillStyle = '#ffffffd9';
+      g.fillRect(at[0], at[1], boxW, boxH);
+      g.fillStyle = color;
+      g.fillRect(at[0], at[1], 3 * s, boxH);
+      g.fillText(text, at[0] + 11 * s, at[1] + boxH / 2);
+    }
+    g.textAlign = 'center';
+    for (const { lbl } of blocks.values()) {
+      const at = screenOf(lbl, w, h);
+      if (!at) continue;
+      const text = lbl.element.textContent;
+      g.strokeStyle = '#ffffff';
+      g.lineWidth = 5 * s;
+      g.strokeText(text, at[0], at[1]);
+      g.fillStyle = '#161616';
+      g.fillText(text, at[0], at[1]);
+    }
+    g.restore();
+  }
+
+  function wrap(g, text, width) {
+    const lines = [];
+    for (const word of text.split(' ')) {
+      const joined = lines.length ? `${lines[lines.length - 1]} ${word}` : word;
+      if (lines.length && g.measureText(joined).width <= width) lines[lines.length - 1] = joined;
+      else lines.push(word);
+    }
+    return lines;
+  }
+
+  // Название группы и её назначение на задержке пролёта.
+  function drawCaption(g, { title, text, color }, alpha, w, h) {
+    const s = Math.min(w, h) / LABEL_BASE, pad = 22 * s, width = Math.min(620 * s, w - 80 * s);
+    g.save();
+    g.globalAlpha = alpha;
+    g.font = `400 ${17 * s}px "IBM Plex Sans", sans-serif`;
+    const lines = wrap(g, text, width - pad * 2), step = 24 * s, boxH = pad * 2 + 44 * s + step * lines.length;
+    const x = 40 * s, y = 40 * s;
+    g.fillStyle = '#ffffffeb';
+    g.fillRect(x, y, width, boxH);
+    g.fillStyle = color;
+    g.fillRect(x, y, 5 * s, boxH);
+    g.textBaseline = 'top';
+    g.fillStyle = '#161616';
+    g.font = `600 ${30 * s}px "IBM Plex Sans", sans-serif`;
+    g.fillText(title, x + pad, y + pad);
+    g.font = `400 ${17 * s}px "IBM Plex Sans", sans-serif`;
+    g.fillStyle = '#525252';
+    lines.forEach((l, i) => g.fillText(l, x + pad, y + pad + 44 * s + step * i));
+    g.restore();
   }
 
   // ------------------------------------------------ кадр
 
   function resize() {
-    const { clientWidth: w, clientHeight: h } = container;
-    if (!w || !h) return;
-    renderer.setSize(w, h); labels.setSize(w, h);
+    const { clientWidth, clientHeight } = container;
+    if (!clientWidth || !clientHeight) return;
+    const [w, h] = renderSize ?? [clientWidth, clientHeight];
+    if (renderSize) renderer.setSize(w, h, false);
+    else { renderer.setSize(w, h); labels.setSize(w, h); }
     const aspect = w / h;
     persp.aspect = aspect; persp.updateProjectionMatrix();
     Object.assign(ortho, { left: -orthoH * aspect, right: orthoH * aspect, top: orthoH, bottom: -orthoH });
@@ -692,6 +816,16 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
   const ease = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
   // Кадр рисуется, только когда что-то изменилось; анимация идёт не чаще 30 кадров в секунду.
   renderer.setAnimationLoop(now => {
+    if (held) return;  // при записи кадрами управляет рендер ролика
+    if (flight) {
+      const t = (now - (flight.t0 ??= now)) / 1000;
+      const at = flightFrame(flight.path, Math.min(t, flight.path.duration));
+      labels.render(scene, camera);
+      gizmo.draw();
+      flight.onFrame?.(at, t);
+      if (t >= flight.path.duration) stopFlight();
+      return;
+    }
     const dt = Math.min(0.1, (now - (last || now)) / 1000);
     let changed = dirty;
     if (fly) {
@@ -714,18 +848,68 @@ export function createScene(container, { onHover, onSelect, onSelectGroup, onCam
     }
     renderer.render(scene, camera);
     labels.render(scene, camera);
-    drawGizmo();
+    gizmo.draw();
     dirty = false;
     last = now;
   });
 
+  function stopFlight() {
+    if (!flight) return;
+    const done = flight.onEnd;
+    flight = null;
+    endFlight();
+    done?.();
+  }
+
   return {
     show, select, selectGroup, overview, setProjection, soft,
-    snapAxis(name, sign = 1) { snap(AXES.find(a => a.name === name).dir.clone().multiplyScalar(sign)); },
+    snapAxis(name, sign = 1) {
+      snap(new THREE.Vector3(name === 'X' ? sign : 0, name === 'Y' ? sign : 0, name === 'Z' ? sign : 0));
+    },
+    // То, из чего строится маршрут пролёта. aspect — пропорции кадра видео, а не окна.
+    flightContext(aspect) {
+      return {
+        aspect, tanHalf, box: bounds(),
+        fit: (box, dir, a) => fitDistance(box, dir, a),
+        view: { target: controls.target.clone(), dir: viewDir(), dist: viewDist() },
+        groups: Object.keys(groupInfo).filter(g => plates.has(g)).map(g => ({
+          id: g, title: groupInfo[g].title ?? g, purpose: groupInfo[g].purpose ?? '', color: plates.get(g).color,
+          box: plates.get(g).box,
+        })),
+      };
+    },
+    playFlight(path, orthographic, onFrame, onEnd) {
+      stopFlight();
+      beginFlight(orthographic);
+      flight = { path, onFrame, onEnd };
+    },
+    stopFlight,
+    // Запись: renderVideo вызывает эти функции вместо цикла окна.
+    recorder: (path, orthographic, { showLabels }) => ({
+      prepare(w, h) {
+        beginFlight(orthographic);
+        held = true;
+        renderer.setPixelRatio(1);
+        renderSize = [w, h];
+        resize();
+      },
+      draw: t => flightFrame(path, t),
+      overlay(g, at, w, h) {
+        if (showLabels && labelsOn) drawLabels(g, w, h);
+        if (at.caption) drawCaption(g, at.caption, at.alpha, w, h);
+      },
+      restore() {
+        renderSize = null;
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+        endFlight();
+        held = false;
+      },
+    }),
+    canvas: renderer.domElement,
     isOrtho: () => camera === ortho,
     setAnimate(v) { animate = v; edges.forEach(e => { e.pts.visible = v; }); dirty = true; },
     isAnimating: () => animate,
-    setLabels(v) { labels.domElement.classList.toggle('hide-labels', !v); dirty = true; },
+    setLabels(v) { labelsOn = v; labels.domElement.classList.toggle('hide-labels', !v); dirty = true; },
   };
 }
 

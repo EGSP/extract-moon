@@ -1,15 +1,9 @@
 // Справочник архитектур и карточки: весь каталог загружается одним запросом, сцена показывает выбранную архитектуру.
-import "@fontsource/ibm-plex-sans/cyrillic-300.css";
-import "@fontsource/ibm-plex-sans/cyrillic-400.css";
-import "@fontsource/ibm-plex-sans/cyrillic-600.css";
-import "@fontsource/ibm-plex-sans/latin-300.css";
-import "@fontsource/ibm-plex-sans/latin-400.css";
-import "@fontsource/ibm-plex-sans/latin-600.css";
-import "@fontsource/ibm-plex-sans/greek-400.css";
-import "@fontsource/ibm-plex-mono/latin-400.css";
-import "@fontsource/ibm-plex-mono/cyrillic-400.css";
+import "@extract-moon/sdk/fonts";
+import "@extract-moon/sdk/style.css";
 import './style.css';
-import { connect, fetchCatalog, fetchMemory } from './api.js';
+import { connect, fetchCatalog, fetchMemory, renderJob } from './api.js';
+import { FlightPanel } from './flight-panel.js';
 import { createScene, GROUP_COLORS, shapeText, sizeText, plural } from './scene.js';
 import { icon } from './icons.js';
 import { exampleView, memoryView } from './examples.js';
@@ -23,6 +17,7 @@ const HINT = 'Анимация по умолчанию выключена, чт�
 
 let cat = null, current = null, selectedBlock = null, selectedGroup = null;
 const memory = new Map();  // имя запуска -> полупериоды памяти или обещание их загрузки
+let flights = null;
 const scene = createScene($('#stage'), {
   onHover: id => { $('#status').textContent = id ? blockById(id)?.title ?? '' : ''; },
   onSelect: id => selectBlock(id),
@@ -82,6 +77,7 @@ function open(kind, id) {
   renderList();
   renderHeader();
   renderCard();
+  flights?.refresh();
 }
 
 function renderHeader() {
@@ -244,6 +240,7 @@ function setOn(sel, v) { $(sel).classList.toggle('on', v); }
 $('#btn-overview').innerHTML = `${icon('fit')}Обзор`;
 $('#btn-labels').innerHTML = `${icon('label')}Подписи`;
 $('#btn-proj').innerHTML = `${icon('cube')}Ортография`;
+$('#btn-flight').innerHTML = `${icon('video')}Пролёт`;
 function syncAnim() {
   const on = scene.isAnimating();
   $('#btn-anim').innerHTML = `${icon(on ? 'pause' : 'play')}Анимация`;
@@ -258,9 +255,10 @@ $('#btn-labels').addEventListener('click', () => {
 });
 $('#btn-proj').addEventListener('click', () => scene.setProjection(!scene.isOrtho()));
 $('#btn-overview').addEventListener('click', () => { selectBlock(null); scene.overview(); });
+$('#btn-flight').addEventListener('click', () => { setOn('#btn-flight', flights.toggle()); });
 
 addEventListener('keydown', ev => {
-  if (ev.target.tagName === 'INPUT' || ev.altKey || ev.metaKey) return;
+  if (['INPUT', 'SELECT'].includes(ev.target.tagName) || ev.altKey || ev.metaKey) return;
   const sign = ev.ctrlKey ? -1 : 1;
   const views = { Numpad1: 'Z', Numpad3: 'X', Numpad7: 'Y' };
   if (views[ev.code]) { scene.snapAxis(views[ev.code], sign); ev.preventDefault(); return; }
@@ -274,10 +272,17 @@ addEventListener('keydown', ev => {
 async function load() {
   await connect();
   cat = await fetchCatalog();
+  flights = new FlightPanel(scene, () => current);
   const [kind, id] = decodeURIComponent(location.hash.slice(1)).split('=');
   const ok = kind === 'arch' ? archOf(id) : kind === 'run' ? runOf(id) : null;
-  if (ok) open(kind, id); else open('arch', cat.archs[0].id);
+  const job = await renderJob();
+  const task = job && JSON.parse(job);
+  if (task?.run) open('run', task.run);
+  else if (task?.arch) open('arch', task.arch);
+  else if (ok) open(kind, id);
+  else open('arch', cat.archs[0].id);
   $('#hint').textContent = HINT;
   $('#status').textContent = '';
+  if (task) await flights.runJob(task);
 }
 load().catch(e => { $('#status').textContent = 'Ошибка загрузки: ' + e.message; });

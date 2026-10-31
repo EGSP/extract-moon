@@ -19,6 +19,7 @@
       <div id="title"></div>
       <div id="tools">
         <button id="btn-overview" title="Показать всю модель (Home)"></button>
+        <button id="btn-flight" title="Пролёты камеры и запись видео"></button>
         <button id="btn-anim" title="Анимация потоков (P)"></button>
         <button id="btn-labels" class="on" title="Подписи (L)"></button>
         <button id="btn-proj" title="Ортографическая проекция (5 на цифровом блоке)"></button>
@@ -28,6 +29,36 @@
     <div id="bottom">
       <div id="legend"></div>
       <div id="hint"></div>
+    </div>
+    <div id="frame-guide" hidden></div>
+    <div id="caption" hidden></div>
+    <section id="flight" hidden>
+      <h2>Пролёт камеры</h2>
+      <label class="row">Маршрут <select id="fl-kind"></select></label>
+      <div id="fl-route" class="fields">
+        <label class="row">От группы <select id="fl-from"></select></label>
+        <label class="row">До группы <select id="fl-to"></select></label>
+        <label class="row">Задержка на группе, с <input id="fl-pause" type="number" min="0.5" max="30" step="0.5" value="2.5"></label>
+      </div>
+      <label id="fl-still" class="row" hidden>Длина ролика, с <input id="fl-seconds" type="number" min="1" max="600" step="1" value="10"></label>
+      <label class="row">Проекция <select id="fl-proj"><option value="persp">Перспектива</option><option value="ortho">Ортография</option></select></label>
+      <label id="fl-speed-row" class="row">Скорость <select id="fl-speed"></select></label>
+      <div id="fl-size"></div>
+      <label class="check"><input id="fl-legend" type="checkbox" checked>Легенда в углу ролика</label>
+      <p id="fl-info" class="hint"></p>
+      <div class="actions">
+        <button id="fl-play"></button>
+        <button id="fl-render" class="primary"></button>
+      </div>
+    </section>
+    <div id="toast" hidden></div>
+    <div id="modal" hidden>
+      <div class="dialog">
+        <h2>Экспорт видео</h2>
+        <p id="modal-text"></p>
+        <div class="progress"><div id="modal-bar"></div></div>
+        <button id="modal-cancel">Отмена</button>
+      </div>
     </div>
     <div id="status">Загрузка справочника</div>
   </main>

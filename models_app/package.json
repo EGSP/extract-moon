@@ -9,10 +9,9 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@fontsource/ibm-plex-mono": "^5.3.0",
-    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@extract-moon/sdk": "*",
     "@tauri-apps/api": "^2.12.4",
-    "three": "0.160.0"
+    "three": "^0.170.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",

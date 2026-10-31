@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
+extract-moon-shell = { path = "../../packages/shell" }
 
 [profile.release]
 opt-level = 3

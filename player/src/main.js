@@ -1,17 +1,13 @@
 // Интерфейс проигрывателя: воспроизведение, панель сведений, снимки и экспорт.
-import "@fontsource/ibm-plex-sans/cyrillic-400.css";
-import "@fontsource/ibm-plex-sans/cyrillic-600.css";
-import "@fontsource/ibm-plex-sans/latin-400.css";
-import "@fontsource/ibm-plex-sans/latin-600.css";
-import "@fontsource/ibm-plex-sans/greek-400.css";
-import "@fontsource/ibm-plex-mono/latin-400.css";
-import "@fontsource/ibm-plex-mono/cyrillic-400.css";
+import "@extract-moon/sdk/fonts";
+import "@extract-moon/sdk/style.css";
 import "./style.css";
 import { ClipTrack } from "./clips.js";
 import { Commands } from "./commands.js";
 import { Director, MODES } from "./director.js";
-import { renderVideo } from "./export.js";
-import { Gizmo } from "./gizmo.js";
+import { AXES, Gizmo } from "@extract-moon/sdk/gizmo";
+import { renderVideo } from "@extract-moon/sdk/video";
+import { mountVideoSize, placeFrameGuide } from "@extract-moon/sdk/video-size";
 import { factionColor, iconSvg, LEGEND, onColor, preloadIcons } from "./icons.js";
 import { finishJob, loadStage, openFolder, renderJob, saveOutput, stages } from "./replay.js";
 import { chooseRanges, rangesLength, splitTimeline, tickInRanges } from "./timeline.js";
@@ -34,6 +30,7 @@ const world = new World(canvas);
 const commands = new Commands();
 const directors = new Map();
 const state = { rep: null, list: [], tick: 0, playing: false, speed: 0, smooth: true, exporting: false, shownIdx: -1, arming: null };
+const videoSize = mountVideoSize($("video-size"), () => showFrameGuide());
 const clips = new ClipTrack($("clips"), {
   commands,
   span: () => maxTick(),
@@ -312,26 +309,8 @@ function exportMeta(file, video, speed, ranges, span, camera, settings, list) {
   }, null, 2);
 }
 
-/** Размер кадра видео. «Как окно» берёт пропорции окна, остальные варианты от окна не зависят. */
-function videoSize() {
-  const value = $("quality").value;
-  if (value.startsWith("window:")) {
-    const height = Number(value.slice(7));
-    return [Math.round((height * canvas.width) / canvas.height), height];
-  }
-  const clamp = (v, max) => Math.min(Math.max(Math.round(v) || 64, 64), max);
-  if (value === "custom") return [clamp(Number($("custom-w").value), 3840), clamp(Number($("custom-h").value), 2160)];
-  return value.split("x").map(Number);
-}
-
-/** Рамка на сцене показывает кадр видео, если он уже окна; более широкий кадр захватит сцену по бокам. */
 function showFrameGuide() {
-  const guide = $("frame-guide");
-  const [w, h] = videoSize();
-  const box = $("viewport").getBoundingClientRect();
-  const width = box.height * (w / h);
-  guide.hidden = $("quality").value.startsWith("window:") || width >= box.width - 1;
-  guide.style.width = `${width}px`;
+  placeFrameGuide($("frame-guide"), $("viewport").getBoundingClientRect(), videoSize.size());
 }
 
 async function exportVideo() {
@@ -339,7 +318,7 @@ async function exportVideo() {
   state.exporting = true;
   setPlaying(false);
   const speed = SPEEDS[state.speed];
-  const [width, height] = videoSize();
+  const [width, height] = videoSize.size();
   const span = maxTick();
   const ranges = await chooseRanges({
     parts: splitTimeline(commands.enabled, span, commandTitle),
@@ -371,7 +350,7 @@ async function renderRanges(ranges, width, height, stem = null) {
   const camera = world.cameraState();
   const animated = commands.enabled.length > 0;
   const list = commands.enabled;
-  const legend = $("legend").checked ? legendLines() : [];
+  const legend = $("video-legend").checked ? legendLines() : [];
   const settings = { smooth: state.smooth, ...world.options, selectedRobot: world.selected, legend };
   const frames = Math.max(Math.round((rangesLength(ranges) / speed) * FPS), 1) + 1;
   let stop = false;
@@ -381,12 +360,18 @@ async function renderRanges(ranges, width, height, stem = null) {
   $("modal").hidden = false;
   try {
     const result = await renderVideo({
-      world, canvas, width, height, fps: FPS, frames, legend,
-      tickAt: (j) => {
+      canvas, width, height, fps: FPS, frames, legend,
+      prepare: (w, h) => {
+        world.renderer.setPixelRatio(1);
+        world.setRenderSize(w, h, false);
+      },
+      drawFrame: (j) => {
         const tick = tickInRanges(ranges, (j * speed) / FPS);
         if (animated) followCommands(tick);
-        return shownTick(tick);
+        world.update(shownTick(tick));
+        world.render();
       },
+      restore: () => world.resize(),
       onProgress: (k) => { $("modal-bar").style.width = `${k * 100}%`; },
       cancelled: () => stop,
     });
@@ -591,16 +576,11 @@ function bindUi() {
     commands.follow = false;
     showCommands();
   };
-  new Gizmo($("gizmo"), world);
+  const gizmo = new Gizmo($("gizmo"), world, { axes: AXES.filter((a) => a.dir[1] >= 0) }); // камера не опускается под грунт
+  world.onRender = () => gizmo.draw();
   $("stage-prev").onclick = () => switchStage(-1);
   $("stage-next").onclick = () => switchStage(1);
   $("speed").onchange = (e) => setSpeed(Number(e.target.value));
-  $("quality").onchange = (e) => {
-    $("custom-size").hidden = e.target.value !== "custom";
-    showFrameGuide();
-  };
-  $("custom-w").oninput = showFrameGuide;
-  $("custom-h").oninput = showFrameGuide;
   $("seek").oninput = (e) => { state.tick = Number(e.target.value); draw(); };
 
   // Перетаскивание вращает камеру, поэтому выбором считается только щелчок без сдвига.
@@ -659,7 +639,7 @@ async function runJob(text) {
   try {
     world.options.icons = job.icons ?? true;
     world.options.vision = job.vision ?? true;
-    $("legend").checked = job.legend ?? true;
+    $("video-legend").checked = job.legend ?? true;
     state.speed = SPEEDS.indexOf(job.speed);
     if (state.speed < 0) throw new Error(`скорости ${job.speed} нет в списке`);
     const from = job.from ?? 0;
@@ -679,6 +659,7 @@ async function runJob(text) {
 async function start() {
   bindUi();
   world.resize();
+  showFrameGuide();
   await Promise.all([preloadIcons(), document.fonts.load('42px "IBM Plex Mono"', "α1"), world.load()]);
   const current = await refreshStages();
   const job = await renderJob();

@@ -51,7 +51,8 @@ main { position: relative; min-width: 0; }
 #topbar > * { pointer-events: auto; }
 #title .main { font-size: 18px; font-weight: 400; }
 #title .sub { color: var(--muted); font-size: 12px; }
-#tools { display: flex; gap: 1px; align-items: start; }
+#tools { display: flex; gap: 1px; align-items: start; pointer-events: none; }  /* пустая часть полосы не закрывает гизмо */
+#tools button { pointer-events: auto; }
 #warning { position: absolute; top: 72px; left: 16px; right: 16px; padding: 10px 14px;
   background: #fcf4d6f2; border-left: 3px solid var(--warn); color: var(--text); font-size: 13px; }
 #bottom { position: absolute; left: 16px; right: 16px; bottom: 12px; pointer-events: none; }
@@ -116,11 +117,40 @@ details { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 10px
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 details[open] summary { margin-bottom: 8px; }
 details p { font-size: 13px; }
-.gizmo { position: absolute; right: 16px; top: 64px; width: 100px; height: 100px; border-radius: 50%;
-  background: #f4f4f4cc; }
-.gizmo [data-axis] { cursor: pointer; }
-.gizmo [data-axis]:hover circle { stroke: #161616; stroke-width: 2; }
-.gizmo text { font: 600 11px "IBM Plex Sans", sans-serif; fill: #fff; pointer-events: none; }
+.gizmo { position: absolute; right: 16px; top: 64px; --gizmo-bg: #f4f4f4cc; --gizmo-hover: #161616; --gizmo-hole: #ffffff; --gizmo-text: #ffffff; }
+
+/* Пролёты и запись. */
+[hidden] { display: none !important; }
+#frame-guide { position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%); pointer-events: none;
+  box-shadow: 0 0 0 100vmax #16161633; outline: 1px dashed #161616; clip-path: inset(0 -100vmax); }
+#flight { position: absolute; left: 16px; top: 72px; width: 312px; padding: 14px 16px; background: #fffffff5;
+  border-left: 3px solid var(--accent); display: flex; flex-direction: column; gap: 8px; box-shadow: 0 2px 6px #0000001f; }
+#flight h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+#flight .fields { display: flex; flex-direction: column; gap: 8px; }
+#flight .row, #flight .field { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+#flight .video-size { display: flex; flex-direction: column; align-items: stretch; }
+#flight select, #flight input[type=number] { width: 176px; height: 30px; padding: 0 8px; border: 0; border-bottom: 1px solid var(--line-strong);
+  background: var(--layer); color: var(--text); font: inherit; font-size: 12px; }
+#flight .video-size-custom { justify-content: flex-end; }
+#flight .video-size-custom input { width: 72px; height: 30px; }
+#flight .check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); cursor: pointer; }
+#flight .hint { margin: 0; }
+#flight .actions { display: flex; gap: 1px; }
+#flight .actions button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+button.primary { background: var(--accent); color: #fff; }
+button.primary:hover { background: #0353e9; }
+#caption { position: absolute; left: 16px; bottom: 96px; width: min(420px, calc(100% - 32px)); padding: 12px 16px;
+  background: #ffffffeb; border-left: 5px solid var(--c); pointer-events: none; }
+#caption b { display: block; font-size: 20px; font-weight: 600; }
+#caption span { font-size: 13px; color: var(--text2); }
+#toast { position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); max-width: 80%; padding: 10px 16px;
+  background: #161616; color: #f4f4f4; font-size: 13px; overflow-wrap: anywhere; }
+#toast.err { background: var(--err); }
+#modal { position: fixed; inset: 0; display: grid; place-items: center; background: #161616b0; z-index: 5; }
+.dialog { width: 420px; padding: 16px; background: var(--panel); }
+.dialog h2 { font-size: 20px; font-weight: 400; margin: 0 0 8px; }
+.progress { height: 8px; background: var(--line); margin: 8px 0 12px; }
+.progress div { height: 100%; width: 0; background: var(--accent); }
 
 /* Подложки групп в сцене. */
 .grp { pointer-events: auto; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c); padding: 2px 8px;

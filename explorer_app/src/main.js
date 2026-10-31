@@ -1,11 +1,5 @@
 // Экран проводника: дерево запусков, страница запуска, графики и их анимация.
-import "@fontsource/ibm-plex-sans/cyrillic-400.css";
-import "@fontsource/ibm-plex-sans/cyrillic-600.css";
-import "@fontsource/ibm-plex-sans/latin-400.css";
-import "@fontsource/ibm-plex-sans/latin-600.css";
-import "@fontsource/ibm-plex-sans/greek-400.css";
-import "@fontsource/ibm-plex-mono/latin-400.css";
-import "@fontsource/ibm-plex-mono/cyrillic-400.css";
+import "@extract-moon/sdk/fonts";
 import "./style.css";
 import { action, connect, exportState, fetchChart, fetchRun, fetchRuns, inWindow, openExport, pickVideo, startExport } from "./api.js";
 import { color, drawTimeline, Panel } from "./charts.js";

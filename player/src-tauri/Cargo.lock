@@ -729,10 +729,19 @@ dependencies = [
 name = "extract-moon-player"
 version = "0.1.0"
 dependencies = [
+ "extract-moon-shell",
  "flate2",
  "serde",
  "tauri",
  "tauri-build",
+]
+
+[[package]]
+name = "extract-moon-shell"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
 ]
 
 [[package]]

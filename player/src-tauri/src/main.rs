@@ -5,8 +5,8 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use extract_moon_shell::{job_text, open_dir, write_output};
 use flate2::read::GzDecoder;
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -116,32 +116,22 @@ fn save_output(target: State<'_, Target>, request: Request<'_>) -> Result<String
         request.headers().get(key).and_then(|v| v.to_str().ok()).ok_or(format!("нет заголовка {key}"))
     };
     let replay = find(&target, header("x-replay")?)?;
-    let file = header("x-file")?;
-    let file = Path::new(file).file_name().ok_or("неверное имя файла")?;
     let mut dir = replay.parent().ok_or("у реплея нет папки")?.to_path_buf();
     if header("x-kind")? == "shot" {
         dir.push("screens");
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     }
-    let out = dir.join(file);
-    fs::write(&out, data).map_err(|e| e.to_string())?;
-    // canonicalize на Windows добавляет к пути префикс \\?\, в сообщении он не нужен.
-    let shown = out.to_string_lossy();
-    Ok(shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_string())
+    write_output(&dir, header("x-file")?, data)
 }
 
 #[tauri::command]
 fn open_folder(target: State<Target>, name: String) -> Result<(), String> {
     let replay = find(&target, &name)?;
-    Command::new("explorer").arg(replay.parent().ok_or("у реплея нет папки")?).spawn().map_err(|e| e.to_string())?;
-    Ok(())
+    open_dir(replay.parent().ok_or("у реплея нет папки")?)
 }
 
-/// Задание рендера из переменной EXTRACT_MOON_JOB: интерфейс снимает ролик и закрывает окно.
 #[tauri::command]
 fn render_job() -> Result<Option<String>, String> {
-    let Ok(path) = std::env::var("EXTRACT_MOON_JOB") else { return Ok(None) };
-    fs::read_to_string(path).map(Some).map_err(|e| e.to_string())
+    job_text()
 }
 
 #[tauri::command]

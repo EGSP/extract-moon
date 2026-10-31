@@ -729,10 +729,18 @@ dependencies = [
 name = "extract-moon-explorer"
 version = "0.1.0"
 dependencies = [
- "serde",
+ "extract-moon-shell",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+]
+
+[[package]]
+name = "extract-moon-shell"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
 ]
 
 [[package]]
