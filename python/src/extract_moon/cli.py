@@ -1,4 +1,4 @@
-"""Командная строка: extract-moon train | runs | explorer | watch | plot | record | view | player | gif | video."""
+"""Командная строка: extract-moon train | runs | explorer | explorer-app | watch | plot | plot-video | record | view | player | gif | video."""
 
 from __future__ import annotations
 
@@ -74,6 +74,10 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("runs", help="список запусков: правила, родительская модель, коммит, итог")
     sub.add_parser("explorer", help="окно со всеми запусками и кнопками просмотра")
+    e = sub.add_parser("explorer-app", help="новый проводник запусков на Tauri")
+    e.add_argument("--serve", action="store_true", help="без окна: только сервис и адрес для браузера")
+    e.add_argument("--port", type=int, default=0, help="порт сервиса; по умолчанию свободный")
+    e.add_argument("--runs-dir", type=Path, default=RUNS_DIR, help="папка запусков")
     m = sub.add_parser("models", help="3D-справочник архитектур: схемы и модели всех запусков в браузере")
     m.add_argument("--port", type=int, default=8765)
     m.add_argument("--no-browser", action="store_true", help="не открывать браузер")
@@ -90,10 +94,19 @@ def main(argv: list[str] | None = None) -> None:
     w = sub.add_parser("watch", help="живые графики обучения (одного или нескольких запусков)")
     w.add_argument("runs", nargs="+", help="имена запусков в data/runs или пути к ним")
     w.add_argument("--interval", type=float, default=5.0, help="период обновления, с")
+    w.add_argument("--own", action="store_true", help="только сам запуск, без склейки с предками")
 
     p = sub.add_parser("plot", help="сохранить графики обучения в PNG")
     p.add_argument("runs", nargs="+")
     p.add_argument("--out", type=Path, default=None)
+    p.add_argument("--own", action="store_true", help="только сам запуск, без склейки с предками")
+
+    pv = sub.add_parser("plot-video", help="сохранить в MP4 графики обучения, которые строятся по обновлениям")
+    pv.add_argument("run", help="имя запуска в data/runs или путь к нему")
+    pv.add_argument("--out", type=Path, default=None)
+    pv.add_argument("--speed", type=float, default=30, help="обновлений в секунду")
+    pv.add_argument("--panel", type=int, default=None, help="номер одного графика с нуля; без него все")
+    pv.add_argument("--fps", type=int, default=30)
 
     v = sub.add_parser("view", help="открыть реплей, папку реплеев или все этапы запуска")
     v.add_argument("replay", help="файл .jsonl.gz, папка или имя запуска")
@@ -129,6 +142,10 @@ def main(argv: list[str] | None = None) -> None:
         from .explorer import run_explorer
 
         run_explorer()
+    elif a.cmd == "explorer-app":
+        from .explorer_app import run_app
+
+        run_app(a.runs_dir, a.port, not a.serve)
     elif a.cmd == "models":
         from .model_viewer import serve
 
@@ -161,11 +178,18 @@ def main(argv: list[str] | None = None) -> None:
     elif a.cmd == "watch":
         from .metrics_view import watch
 
-        watch(a.runs, a.interval)
+        watch(a.runs, a.interval, a.own)
     elif a.cmd == "plot":
         from .metrics_view import plot
 
-        print(plot(a.runs, a.out))
+        print(plot(a.runs, a.out, a.own))
+    elif a.cmd == "plot-video":
+        from .metrics_view import export_animation, run_dir
+
+        out = a.out or run_dir(a.run) / "metrics.mp4"
+        path = export_animation(a.run, out, a.speed, a.fps, lambda j, total: print(f"кадр {j}/{total}", flush=True),
+                                a.panel)
+        print(f"видео: {path}")
     elif a.cmd == "gif":
         from .viewer import export_gif
 

@@ -3,12 +3,14 @@
 Дообученные запуски показаны веткой под родителем. У выбранного запуска —
 сохранённые модели на шкале обновлений поверх кривой взлётов: видно, какая
 модель была удачной и от какой пошли дообученные ветки. Проигрыватель и
-графики открываются отдельными окнами. Список обновляется сам.
+графики открываются отдельными окнами. Окно анимации проигрывает графики по
+обновлениям и сохраняет их в MP4. Список обновляется сам.
 """
 
 from __future__ import annotations
 
 import os
+import queue
 import random
 import re
 import subprocess
@@ -18,15 +20,23 @@ import time
 import tkinter as tk
 import webbrowser
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from . import provenance
-from .metrics_view import ema, load_metrics
+from .metrics_view import MIN_EPISODES, MetricsAnimation, all_panels, ema, load_metrics
+from .model_viewer import ensure_service
 from .paths import DATA_DIR, PLAYER_EXE, RUNS_DIR
 
 REFRESH_MS = 10_000
+FRAME_MS = 33
+# В запусках 60-900 обновлений: при 30 в секунду анимация идёт от 2 до 30 секунд.
+DEFAULT_SPEED = 30
+FRAME_RE = re.compile(r"кадр (\d+)/(\d+)")
 # Доля взлётов по меньшему числу матчей слишком шумная: в начале запуска это 1-2 матча.
-MIN_EPISODES = 50
+# Цвета кусков ветки, как у линий в графиках matplotlib.
+SEGMENT_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b")
+ALL_PANELS = "Все графики"
+LAUNCH_PANEL = 1  # «Матчи, где корабль улетел» в metrics_view.PANELS
 CKPT_RE = re.compile(r"model_(\d+)\.pt$")
 STAGE_RE = re.compile(r"u(\d+)_seed\d+\.jsonl\.gz$")
 
@@ -68,6 +78,60 @@ def launch(*args: str) -> None:
     # Отдельный процесс: окно проигрывателя или графиков не блокирует проводник.
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.Popen([sys.executable, "-m", "extract_moon.cli", *args], creationflags=flags)
+
+
+def in_background(root: tk.Tk, work, on_event) -> None:
+    """work(emit) идёт в потоке; emit и итог приходят в on_event(kind, value) в потоке окна.
+
+    kind: progress (из emit), done (результат work) или error (её исключение). Из потока к tkinter
+    обращаться нельзя, поэтому окно само забирает события из очереди.
+    """
+    events: queue.Queue = queue.Queue()
+
+    def body():
+        try:
+            events.put(("done", work(lambda value: events.put(("progress", value)))))
+        except Exception as e:  # показать пользователю, а не потерять в потоке
+            events.put(("error", e))
+
+    def poll():
+        try:
+            while True:
+                kind, value = events.get_nowait()
+                on_event(kind, value)
+                if kind != "progress":
+                    return
+        except queue.Empty:
+            root.after(100, poll)
+
+    threading.Thread(target=body, daemon=True).start()
+    poll()
+
+
+def parse_speed(text: str) -> float | None:
+    try:
+        speed = float(text.replace(",", "."))
+    except ValueError:
+        return None
+    return speed if speed > 0 else None
+
+
+def export_process(run: Path, out: Path, speed: float, panel: int | None, emit) -> None:
+    """Экспорт отдельным процессом: matplotlib в потоке мешал бы окну и не потокобезопасен."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    cmd = [sys.executable, "-m", "extract_moon.cli", "plot-video", str(run), "--out", str(out), "--speed", str(speed)]
+    if panel is not None:
+        cmd += ["--panel", str(panel)]
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                            encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    other = []
+    for line in proc.stdout:
+        if m := FRAME_RE.match(line):
+            emit((int(m.group(1)), int(m.group(2))))
+        else:
+            other.append(line)
+    if proc.wait():
+        raise RuntimeError(other[-1].strip() if other else f"код завершения {proc.returncode}")
 
 
 class Explorer:
@@ -124,7 +188,7 @@ class Explorer:
         actions = ttk.Frame(models)
         actions.pack(fill="x", pady=(6, 0))
         for text, cmd in (("Сыграть новый матч", self.play_model), ("Матч этапа", self.open_stage),
-                          ("Команда дообучения", self.copy_finetune)):
+                          ("Команда дообучения", self.copy_finetune), ("Анимация графика", self.open_launch_animation)):
             ttk.Button(actions, text=text, command=cmd).pack(side="left", padx=(0, 6))
         self.details = tk.Text(right, wrap="word", font=("Segoe UI", 10), relief="flat", background="#f6f6f8",
                                padx=10, pady=8, height=12)
@@ -132,11 +196,14 @@ class Explorer:
         bottom = ttk.Frame(right)
         bottom.pack(fill="x", pady=(8, 0))
         ttk.Button(bottom, text="Журнал запусков", command=lambda: self.open_path(DATA_DIR / "journal.md")).pack(side="left")
+        ttk.Button(bottom, text="Анимация графиков", command=self.open_animation).pack(side="left", padx=(6, 0))
         ttk.Button(bottom, text="Обновить", command=self.refresh).pack(side="right")
         main.add(right, weight=2)
 
         self.runs: dict[str, dict] = {}
-        self.visualizer_url: str | None = None
+        self.visualizer_busy = False
+        self.visualizer_proc: subprocess.Popen | None = None
+        root.protocol("WM_DELETE_WINDOW", self.close)
         self.tick()
 
     def tick(self):
@@ -257,11 +324,19 @@ class Explorer:
         path = dict(r["checkpoints"]).get(upd)
         return (r, upd, path) if path else None
 
+    def branch(self, r: dict) -> list[list[dict]]:
+        """Метрики запуска и его предков от корня, каждый предок до точки ветвления."""
+        parts, seen, limit = [], set(), None
+        while r and r["dir"].name not in seen:
+            seen.add(r["dir"].name)
+            parts.append([row for row in r["rows"] if limit is None or int(row["update"]) <= limit])
+            limit = r["parent_update"]
+            r = self.runs.get(r["parent"])
+        return parts[::-1]
+
     @staticmethod
     def timeline_range(r: dict) -> tuple[int, int]:
-        lo = r["parent_update"] if r["parent"] else 0
-        hi = max(r["total"] or 0, r["update"], *(u for u, _ in r["checkpoints"]), lo + 1)
-        return lo, hi
+        return 0, max(r["total"] or 0, r["update"], *(u for u, _ in r["checkpoints"]), 1)
 
     def draw_timeline(self):
         c = self.timeline
@@ -294,11 +369,24 @@ class Explorer:
             c.create_rectangle(x(r["update"]), top, W - right, bottom, fill="#f4f4f4", outline="")
             c.create_text((x(r["update"]) + W - right) / 2, (top + bottom) / 2, text="ещё обучается",
                           fill="#aaa", font=("Segoe UI", 8))
-        pts = [(int(row["update"]), float(row["launch_rate"])) for row in r["rows"] if reliable(row)]
-        if len(pts) > 1:
-            smooth = ema([v for _, v in pts])
-            coords = [p for (u, _), v in zip(pts, smooth) for p in (x(u), y(v))]
-            c.create_line(*coords, fill="#5b9bd5", width=2)
+        # Кривая склеена с предками; сглаживание идёт через стыки, чтобы на них не было ложного скачка.
+        branch = self.branch(r)
+        parts = [[(int(row["update"]), float(row["launch_rate"])) for row in part if reliable(row)] for part in branch]
+        flat = [p for part in parts for p in part]
+        smooth = ema([v for _, v in flat])
+        start = 0
+        for i, part in enumerate(parts):
+            end = start + len(part)
+            lo_i = max(start - 1, 0)  # кусок начинается с конца предыдущего, чтобы линия была сплошной
+            coords = [p for (u, _), v in zip(flat[lo_i:end], smooth[lo_i:end]) for p in (x(u), y(v))]
+            if len(coords) >= 4:
+                c.create_line(*coords, fill=SEGMENT_COLORS[i % len(SEGMENT_COLORS)], width=2)
+            start = end
+        for part in branch[:-1]:
+            if part:
+                u = int(part[-1]["update"])
+                c.create_line(x(u), top, x(u), bottom, fill="#555", dash=(4, 3))
+                c.create_text(x(u) + 3, top + 1, text=f"u{u}", anchor="nw", fill="#555", font=("Segoe UI", 8))
         sel = self.selected_checkpoint()
         sel_upd = sel[1] if sel else None
         for upd, _ in r["checkpoints"]:
@@ -415,19 +503,248 @@ class Explorer:
         if r:
             self.open_path(r["dir"])
 
-    def open_visualizer(self):
-        # Сервер живёт в потоке проводника и запускается один раз; повторное нажатие открывает ту же страницу.
-        if self.visualizer_url is None:
-            from .model_viewer import make_server
+    def open_animation(self):
+        r = self.need()
+        if not r:
+            return
+        if not r["rows"]:
+            messagebox.showinfo("Extract Moon", "У этого запуска пока нет метрик.")
+            return
+        MetricsPlayer(self.root, r)
 
-            server = make_server()
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            self.visualizer_url = f"http://127.0.0.1:{server.server_port}/"
-        webbrowser.open(self.visualizer_url)
+    def open_launch_animation(self):
+        """Анимация графика взлётов, который виден на шкале моделей."""
+        r = self.need()
+        if not r:
+            return
+        if not any(self.branch(r)):
+            messagebox.showinfo("Extract Moon", "У этого запуска пока нет метрик.")
+            return
+        MetricsPlayer(self.root, r, LAUNCH_PANEL)
+
+    def open_visualizer(self):
+        """Открывает работающий сервис; если его нет, поднимает его в фоне и ждёт готовности."""
+        if self.visualizer_busy:
+            return
+        self.visualizer_busy = True
+
+        def finished(kind, value):
+            self.visualizer_busy = False
+            if kind == "error":
+                messagebox.showerror("Extract Moon", f"Не удалось запустить визуализатор:\n{value}")
+                return
+            url, proc = value
+            if proc:
+                self.visualizer_proc = proc
+            webbrowser.open(url)
+
+        in_background(self.root, lambda _: ensure_service(), finished)
+
+    def close(self):
+        # Сервис, запущенный этим проводником, живёт не дольше него: скрытый процесс некому остановить.
+        if self.visualizer_proc:
+            self.visualizer_proc.terminate()
+        self.root.destroy()
 
     @staticmethod
     def open_path(path):
         os.startfile(path)  # noqa: S606 — открыть в программе по умолчанию (Windows)
+
+
+class MetricsPlayer:
+    """Окно с графиками запуска: линии строятся от первого обновления к последнему."""
+
+    def __init__(self, root: tk.Tk, r: dict, panel: int | None = None):
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from matplotlib.figure import Figure
+
+        self.root, self.run, self.panel = root, r, panel
+        self.win = tk.Toplevel(root)
+        self.win.title(f"Анимация графиков: {r['dir'].name}")
+        self.win.protocol("WM_DELETE_WINDOW", self.close)
+
+        # Пропорции как у окна «Графики», масштаб под экран.
+        dpi = min(100, (root.winfo_screenwidth() - 60) / 19, (root.winfo_screenheight() - 180) / 11)
+        self.fig = Figure(figsize=(19, 11), dpi=dpi)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.win)
+        self.anim = MetricsAnimation(self.fig, str(r["dir"]), panel)
+        self.fig.set_layout_engine("tight")  # подписи не наезжают друг на друга после изменения размера окна
+
+        controls = ttk.Frame(self.win, padding=6)
+        controls.pack(side="bottom", fill="x")
+        self.titles = [ALL_PANELS] + [title for title, _, _ in all_panels(str(r["dir"]))]
+        self.choice = tk.StringVar(value=self.titles[0 if panel is None else panel + 1])
+        chooser = ttk.Combobox(controls, textvariable=self.choice, values=self.titles, state="readonly", width=30)
+        chooser.pack(side="left", padx=(0, 6))
+        chooser.bind("<<ComboboxSelected>>", lambda _: self.switch())
+        self.play_button = ttk.Button(controls, text="Проиграть", command=self.toggle)
+        self.play_button.pack(side="left", padx=(0, 6))
+        self.last = len(self.anim.marks) - 1
+        self.scale = ttk.Scale(controls, from_=0, to=max(self.last, 1), command=self.seek)
+        self.scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        ttk.Label(controls, text="Обновлений в секунду:").pack(side="left", padx=(0, 4))
+        self.speed = tk.StringVar(value=str(DEFAULT_SPEED))
+        ttk.Spinbox(controls, from_=1, to=300, increment=5, width=6, textvariable=self.speed).pack(side="left", padx=(0, 10))
+        ttk.Button(controls, text="Экспорт анимации", command=self.export).pack(side="left")
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        self.pos = float(self.last)  # сначала весь график, «Проиграть» начинает с первого обновления
+        self.stamp = 0.0
+        self.job = None
+        self.render()
+
+    def switch(self):
+        """Другой график: все или один. Положение сбрасывается на конец, как при открытии окна."""
+        self.stop()
+        index = self.titles.index(self.choice.get())
+        self.panel = index - 1 if index else None
+        self.anim.close()
+        self.anim = MetricsAnimation(self.fig, str(self.run["dir"]), self.panel)
+        self.pos = float(self.last)
+        self.render()
+
+    def render(self):
+        self.anim.show(int(self.pos))
+        self.canvas.blit(self.fig.bbox)
+        self.scale.set(self.pos)
+
+    def seek(self, value):
+        if abs(float(value) - self.pos) < 1e-6:  # scale.set из render вызывает этот же обработчик
+            return
+        self.pos = min(float(value), self.last)
+        self.stamp = time.perf_counter()
+        self.render()
+
+    def toggle(self):
+        if self.job:
+            self.stop()
+            return
+        if self.pos >= self.last:
+            self.pos = 0.0
+        self.stamp = time.perf_counter()
+        self.play_button.configure(text="Пауза")
+        self.step()
+
+    def stop(self):
+        if self.job:
+            self.win.after_cancel(self.job)
+        self.job = None
+        self.play_button.configure(text="Проиграть")
+
+    def step(self):
+        now = time.perf_counter()
+        # По реальному времени: если кадр рисовался долго, скорость всё равно та, что выбрана.
+        self.pos = min(self.pos + (parse_speed(self.speed.get()) or DEFAULT_SPEED) * (now - self.stamp), self.last)
+        self.stamp = now
+        self.render()
+        if self.pos < self.last:
+            self.job = self.win.after(FRAME_MS, self.step)
+        else:
+            self.job = None
+            self.stop()
+
+    def export(self):
+        ExportDialog(self.root, self.run, parse_speed(self.speed.get()) or DEFAULT_SPEED, len(self.anim.marks), self.panel)
+
+    def close(self):
+        self.stop()
+        self.win.destroy()
+
+
+class ExportDialog:
+    """Параметры экспорта графиков в MP4. Видео собирает отдельный процесс, окна проводника не ждут его."""
+
+    def __init__(self, root: tk.Tk, r: dict, speed: float, updates: int, panel: int | None = None):
+        self.root, self.run, self.updates, self.panel = root, r, updates, panel
+        self.win = tk.Toplevel(root)
+        self.win.title("Экспорт анимации")
+        self.win.resizable(False, False)
+        frame = ttk.Frame(self.win, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Обновлений в секунду:").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.speed = tk.StringVar(value=f"{speed:g}")
+        ttk.Spinbox(frame, from_=1, to=300, increment=5, width=8, textvariable=self.speed).grid(
+            row=0, column=1, sticky="w", pady=(0, 6))
+        self.duration = ttk.Label(frame, foreground="#666")
+        self.duration.grid(row=0, column=2, sticky="w", padx=(8, 0), pady=(0, 6))
+        self.speed.trace_add("write", lambda *_: self.show_duration())
+
+        ttk.Label(frame, text="Файл:").grid(row=1, column=0, sticky="w")
+        self.path = tk.StringVar(value=str(r["dir"] / ("metrics.mp4" if panel is None else f"metrics_{panel + 1}.mp4")))
+        ttk.Entry(frame, textvariable=self.path, width=60).grid(row=1, column=1, columnspan=2, sticky="ew")
+        ttk.Button(frame, text="Обзор", command=self.browse).grid(row=1, column=3, padx=(6, 0))
+
+        self.bar = ttk.Progressbar(frame, maximum=1.0)
+        self.bar.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(10, 4))
+        self.status = ttk.Label(frame, text="", wraplength=560)
+        self.status.grid(row=3, column=0, columnspan=4, sticky="w")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=4, column=0, columnspan=4, sticky="e", pady=(10, 0))
+        self.save_button = ttk.Button(buttons, text="Сохранить", command=self.start)
+        self.save_button.pack(side="left", padx=(0, 6))
+        self.open_button = ttk.Button(buttons, text="Открыть файл", state="disabled", command=self.open_result)
+        self.open_button.pack(side="left", padx=(0, 6))
+        ttk.Button(buttons, text="Закрыть", command=self.win.destroy).pack(side="left")
+        self.show_duration()
+
+    def seconds(self, speed: float) -> float:
+        return (self.updates - 1) / speed
+
+    def show_duration(self):
+        speed = parse_speed(self.speed.get())
+        self.duration.configure(text=f"видео на {self.seconds(speed):.1f} с, обновлений {self.updates}" if speed
+                                else "скорость должна быть больше нуля")
+
+    def browse(self):
+        current = Path(self.path.get())
+        name = filedialog.asksaveasfilename(parent=self.win, title="Сохранить видео", defaultextension=".mp4",
+                                            filetypes=[("Видео MP4", "*.mp4")], initialdir=current.parent,
+                                            initialfile=current.name)
+        if name:
+            self.path.set(name)
+
+    def start(self):
+        speed = parse_speed(self.speed.get())
+        out = self.path.get().strip()
+        if not speed:
+            messagebox.showinfo("Extract Moon", "Скорость должна быть числом больше нуля.", parent=self.win)
+            return
+        if not out:
+            messagebox.showinfo("Extract Moon", "Выберите файл.", parent=self.win)
+            return
+        self.result = Path(out)
+        self.save_button.configure(state="disabled")
+        self.open_button.configure(state="disabled")
+        self.bar.configure(value=0)
+        self.status.configure(text="Подготовка графиков…")
+        in_background(self.root, lambda emit: export_process(self.run["dir"], self.result, speed, self.panel, emit),
+                      self.on_event)
+
+    def on_event(self, kind, value):
+        alive = self.win.winfo_exists()
+        if kind == "progress":
+            if alive:
+                self.bar.configure(value=value[0] / value[1])
+                self.status.configure(text=f"Кадр {value[0]} из {value[1]}")
+            return
+        if not alive:  # окно закрыли во время экспорта: итог всё равно нужно показать
+            if kind == "error":
+                messagebox.showerror("Extract Moon", f"Экспорт не удался:\n{value}")
+            else:
+                messagebox.showinfo("Extract Moon", f"Видео сохранено: {self.result}")
+            return
+        self.save_button.configure(state="normal")
+        if kind == "error":
+            self.status.configure(text=f"Экспорт не удался: {value}")
+        else:
+            self.bar.configure(value=1.0)
+            self.status.configure(text=f"Готово: {self.result}")
+            self.open_button.configure(state="normal")
+
+    def open_result(self):
+        os.startfile(self.result)  # noqa: S606 — открыть в программе по умолчанию (Windows)
 
 
 def run_explorer() -> None:

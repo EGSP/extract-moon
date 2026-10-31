@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Extract Moon: запуски</title>
+  </head>
+  <body>
+    <main id="layout">
+      <aside id="runs">
+        <div id="tree-scroll">
+          <table id="tree">
+            <thead>
+              <tr>
+                <th>Запуск</th><th>Состояние</th><th>Правила</th><th class="n">Обновлений</th>
+                <th class="n" title="Среднее по последним 200 матчам">Взлёты сейчас</th>
+                <th class="n" title="Лучшее среднее по 200 матчам за запуск">Лучшие взлёты</th>
+              </tr>
+            </thead>
+            <tbody id="tree-body"></tbody>
+          </table>
+        </div>
+        <p class="note">Ветка под запуском: модели, дообученные от него. Двойной щелчок открывает матчи. Взлёты усреднены по 200 матчам.</p>
+      </aside>
+
+      <section id="page">
+        <div id="empty" hidden></div>
+        <div id="run" hidden>
+          <div id="tabs" role="tablist">
+            <button id="tab-overview" class="tab on" role="tab">Обзор</button>
+            <button id="tab-charts" class="tab" role="tab">Графики</button>
+          </div>
+
+          <div id="pane-overview">
+            <section class="block">
+              <div class="block-head">
+                <h2>Сохранённые модели</h2>
+                <div id="chart-size" class="group" role="radiogroup" aria-label="Высота графика">
+                  <button data-size="compact" class="toggle">Компактный</button>
+                  <button data-size="full" class="toggle">Полный</button>
+                </div>
+              </div>
+              <p class="lag">Подпись взлётов отстаёт: это среднее по последним 200 матчам к этому обновлению. Сам чекпойнт может быть заметно хуже подписи.</p>
+              <div id="timeline-box"><canvas id="timeline"></canvas><div id="timeline-tip" class="tip" hidden></div></div>
+              <div id="timeline-legend" class="legend"></div>
+              <div id="model-actions" class="group">
+                <button data-action="play" class="primary-text" title="Записать матч выбранной модели на CPU и открыть его" data-icon="play" data-text="Сыграть новый матч"></button>
+                <button data-action="stage" class="ghost" title="Матч, записанный при сохранении модели" data-icon="video" data-text="Матч этапа"></button>
+                <button id="finetune" class="ghost" title="Скопировать команду дообучения от выбранной модели" data-icon="copy" data-text="Команда дообучения"></button>
+                <button id="launch-animation" class="ghost" title="Анимация графика взлётов всей ветки" data-icon="activity" data-text="Анимация графика"></button>
+              </div>
+              <div class="table-scroll">
+                <table id="models">
+                  <thead>
+                    <tr>
+                      <th title="Номер обновления">Модель</th><th class="n" title="Опыт, робот-тактов">Опыт</th>
+                      <th class="n" title="Среднее по последним 200 матчам к этому обновлению">Взлёты</th>
+                      <th>Этап</th><th>Дообучены</th>
+                    </tr>
+                  </thead>
+                  <tbody id="models-body"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="block">
+              <h2>Паспорт запуска</h2>
+              <dl id="passport"></dl>
+            </section>
+          </div>
+
+          <div id="pane-charts" hidden>
+            <div id="chart-bar">
+              <div id="view-mode" class="group" role="radiogroup" aria-label="Вид графиков">
+                <button data-view="chain" class="toggle" title="Запуск вместе с предками">Вся ветка</button>
+                <button data-view="own" class="toggle" title="Только сам запуск, без предков">Только запуск</button>
+                <button data-view="compare" class="toggle" title="Несколько запусков на одних осях">Сравнение</button>
+              </div>
+              <div id="compare-picker" hidden>
+                <button id="compare-open" class="ghost" data-icon="chevronDown" data-text="Запуски"></button>
+                <div id="compare-menu" hidden></div>
+              </div>
+              <div id="chain-legend" class="legend"></div>
+            </div>
+            <p id="chart-summary" class="note"></p>
+            <div id="panels"></div>
+            <footer id="transport">
+              <select id="panel-choice" aria-label="Какой график проигрывать"></select>
+              <button id="play" class="icon primary" title="Пуск и пауза (пробел)" data-icon="playFilled"></button>
+              <input id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Обновление" />
+              <span id="frame" class="readout"></span>
+              <label class="field">Обновлений в секунду
+                <input id="speed" type="number" min="1" max="1000" step="5" value="30" />
+              </label>
+              <button id="export" class="ghost" title="Сохранить анимацию в MP4" data-icon="video" data-text="Экспорт анимации"></button>
+            </footer>
+          </div>
+
+          <footer id="run-head">
+            <div id="crumbs"></div>
+            <h1 id="run-name"></h1>
+            <span id="run-state" class="tag"></span>
+            <span class="spacer"></span>
+            <div id="actions" class="group">
+              <button data-action="replays" class="ghost" title="Записанные матчи запуска в проигрывателе" data-icon="play" data-text="Матчи"></button>
+              <button data-action="player" class="ghost" title="Матч выбранной модели, без модели последний этап запуска" data-icon="cube" data-text="Новый плеер"></button>
+              <button id="compare-parent" class="ghost" title="Открыть графики запуска рядом с родителем" data-icon="compare" data-text="Сравнить с родителем"></button>
+              <button data-action="folder" class="ghost" title="Папка запуска" data-icon="folder" data-text="Папка"></button>
+            </div>
+          </footer>
+        </div>
+      </section>
+    </main>
+
+    <header id="shell">
+      <button id="toggle-runs" class="icon" title="Показать или скрыть список запусков" data-icon="sidePanel"></button>
+      <span class="brand">Extract Moon</span>
+      <span class="muted">Запуски</span>
+      <span class="spacer"></span>
+      <span id="refreshed" class="readout" title="Список обновляется сам каждые 10 секунд"></span>
+      <button id="refresh" class="icon" title="Обновить сейчас" data-icon="renew"></button>
+      <button id="journal" class="ghost" title="Открыть журнал запусков" data-icon="document" data-text="Журнал"></button>
+      <button id="visualizer" class="ghost" title="3D-справочник архитектур. Если сервис не поднят, он запустится" data-icon="model" data-text="Визуализатор"></button>
+    </header>
+
+    <div id="toast" role="status" hidden></div>
+
+    <div id="export-dialog" class="overlay" hidden>
+      <div class="dialog">
+        <h2>Экспорт анимации</h2>
+        <p id="export-what" class="note"></p>
+        <label class="stack">Обновлений в секунду
+          <input id="export-speed" type="number" min="1" max="1000" step="5" />
+        </label>
+        <p id="export-duration" class="note"></p>
+        <label class="stack">Файл
+          <span class="row-input">
+            <input id="export-path" type="text" spellcheck="false" />
+            <button id="export-browse" class="ghost">Обзор</button>
+          </span>
+        </label>
+        <div class="progress"><div id="export-bar"></div></div>
+        <p id="export-status" class="note"></p>
+        <div class="dialog-actions">
+          <button id="export-close" class="ghost">Закрыть</button>
+          <button id="export-open" class="ghost" disabled>Открыть файл</button>
+          <button id="export-save" class="primary-text">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="command-dialog" class="overlay" hidden>
+      <div class="dialog">
+        <h2>Команда дообучения</h2>
+        <p id="command-status" class="note"></p>
+        <textarea id="command-text" rows="4" readonly spellcheck="false"></textarea>
+        <div class="dialog-actions">
+          <button id="command-close" class="ghost">Закрыть</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

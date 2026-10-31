@@ -27,3 +27,9 @@ player/node_modules/
 player/dist/
 player/src-tauri/target/
 player/src-tauri/gen/
+
+# Проводник запусков на Tauri
+explorer_app/node_modules/
+explorer_app/dist/
+explorer_app/src-tauri/target/
+explorer_app/src-tauri/gen/

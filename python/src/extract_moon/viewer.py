@@ -388,9 +388,7 @@ def export_video(path: Path, out: Path, cell: int = 20, speed: float = 2, fps: i
                  selected: int | None = None, vision: bool = True, progress=None) -> Path:
     """MP4 только с картой (без боковой панели и кнопок). speed — тактов в секунду, как в проигрывателе;
     роботы плавно движутся между тактами, как при включённой интерполяции."""
-    import subprocess
-
-    import imageio_ffmpeg
+    from .video import encoder
 
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     import pygame
@@ -402,26 +400,14 @@ def export_video(path: Path, out: Path, cell: int = 20, speed: float = 2, fps: i
     total = max(round((len(frames) - 1) / speed * fps), 1) + 1  # кадров видео; последний — конечный такт
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
-           "-s", f"{side}x{side}", "-r", str(fps), "-i", "-", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-           "-crf", "18", "-movflags", "+faststart", str(out)]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    try:
+    with encoder(out, side, side, fps) as write:
         for j in range(total):
             tick = min(j * speed / fps, len(frames) - 1)
             idx = min(int(tick), len(frames) - 1)
             rd.draw(surf, idx, selected, vision=vision, alpha=tick - idx if idx < len(frames) - 1 else 0.0)
-            proc.stdin.write(pygame.image.tobytes(surf, "RGB"))
+            write(pygame.image.tobytes(surf, "RGB"))
             if progress and j % 20 == 0:
                 progress(j, total)
-        proc.stdin.close()
-        err = proc.stderr.read().decode(errors="replace")
-        if proc.wait():
-            raise RuntimeError(f"ffmpeg завершился с ошибкой: {err.strip()}")
-    except BaseException:
-        proc.kill()
-        raise
     return out
 
 
