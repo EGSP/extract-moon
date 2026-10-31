@@ -1,70 +1,64 @@
-import socket
+import json
 import threading
+from urllib.error import HTTPError
+from urllib.request import ProxyHandler, Request, build_opener
 
 import pytest
 
 from extract_moon import model_viewer
-from extract_moon.model_viewer import PORT_SPAN, answers, ensure_service, find_service, make_server, port_free
+from extract_moon.model_viewer import make_server
+
+TOKEN = "проверка".encode().hex()
 
 
 @pytest.fixture
-def base_port():
-    """Начало диапазона портов make_server, свободного целиком."""
-    for port in range(18800, 19800, PORT_SPAN):
-        if all(port_free(p) for p in range(port, port + PORT_SPAN)):
-            return port
-    pytest.skip("нет свободного диапазона портов")
-
-
-@pytest.fixture
-def server(base_port):
-    srv = make_server(base_port)
+def address(tmp_path):
+    (tmp_path / "index.html").write_text("окно", encoding="utf-8")
+    srv, _ = make_server(token=TOKEN, dist=tmp_path)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield srv
+    yield f"http://127.0.0.1:{srv.server_port}"
     srv.shutdown()
     srv.server_close()
 
 
-def test_busy_port_is_skipped(server, base_port):
-    second = make_server(base_port)
-    try:
-        assert server.server_port == base_port
-        assert second.server_port == base_port + 1
-    finally:
-        second.server_close()
+def get(url, token=TOKEN, method="GET"):
+    request = Request(url, method=method, headers={"X-Token": token})
+    with build_opener(ProxyHandler({})).open(request, timeout=30) as resp:  # системный прокси не должен перехватывать localhost
+        return resp.status, resp.headers, resp.read()
 
 
-def test_running_service_is_reused(server, base_port, monkeypatch):
-    def forbidden(*_a, **_k):
-        raise AssertionError("второй экземпляр")
-
-    monkeypatch.setattr(model_viewer.subprocess, "Popen", forbidden)
-    assert ensure_service(base_port) == (f"http://127.0.0.1:{base_port}/", None)
+def test_api_needs_token(address):
+    with pytest.raises(HTTPError) as e:
+        get(f"{address}/api/schemas", token="чужой".encode().hex())
+    assert e.value.code == 403
 
 
-def test_foreign_listener_is_not_the_service(base_port):
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", base_port))
-        s.listen()
-        assert not port_free(base_port)
-        assert not answers(base_port, timeout=0.3)
+def test_token_opens_schemas_and_allows_window_origin(address):
+    status, headers, body = get(f"{address}/api/schemas")
+    assert status == 200 and isinstance(json.loads(body), (list, dict))
+    assert headers["Access-Control-Allow-Origin"] == "*"
+    assert get(f"{address}/?token=", token="", method="OPTIONS")[0] == 204
 
 
-def test_starts_service_and_reports_failure(base_port, tmp_path, monkeypatch):
-    url, proc = ensure_service(base_port)
-    try:
-        assert url == f"http://127.0.0.1:{base_port}/"
-        assert proc is not None
-        assert find_service(base_port) == base_port
-    finally:
-        proc.kill()
-        proc.wait()
+def test_token_in_address_works_for_browser(address):
+    assert get(f"{address}/api/schemas?token={TOKEN}", token="")[0] == 200
 
-    monkeypatch.setattr(model_viewer.sys, "executable", "python-не-существует")
-    with pytest.raises(OSError):
-        ensure_service(base_port)
 
-    monkeypatch.undo()
-    monkeypatch.setenv("PYTHONHOME", str(tmp_path))  # интерпретатор падает при старте
-    with pytest.raises(RuntimeError, match="завершился с кодом"):
-        ensure_service(base_port)
+@pytest.mark.parametrize("name", ["", "..", "a/b", "a%5Cb"])
+def test_memory_rejects_bad_run(address, name):
+    with pytest.raises(HTTPError) as e:
+        get(f"{address}/api/memory?run={name}")
+    assert e.value.code == 400
+
+
+def test_static_stays_inside_dist(address):
+    assert get(f"{address}/")[2].decode() == "окно"
+    with pytest.raises(HTTPError) as e:
+        get(f"{address}/../test_model_viewer_service.py")
+    assert e.value.code == 404
+
+
+def test_missing_window_is_reported(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_viewer, "MODELS_EXE", tmp_path / "нет.exe")
+    with pytest.raises(FileNotFoundError, match="не собран"):
+        model_viewer.run_app()

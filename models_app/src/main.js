@@ -1,4 +1,15 @@
 // Справочник архитектур и карточки: весь каталог загружается одним запросом, сцена показывает выбранную архитектуру.
+import "@fontsource/ibm-plex-sans/cyrillic-300.css";
+import "@fontsource/ibm-plex-sans/cyrillic-400.css";
+import "@fontsource/ibm-plex-sans/cyrillic-600.css";
+import "@fontsource/ibm-plex-sans/latin-300.css";
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-600.css";
+import "@fontsource/ibm-plex-sans/greek-400.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/cyrillic-400.css";
+import './style.css';
+import { connect, fetchCatalog, fetchMemory } from './api.js';
 import { createScene, GROUP_COLORS, shapeText, sizeText, plural } from './scene.js';
 import { icon } from './icons.js';
 import { exampleView, memoryView } from './examples.js';
@@ -109,7 +120,7 @@ function memoryRun() {
 
 function loadMemory(name) {
   if (!memory.has(name)) {
-    memory.set(name, fetch(`/api/memory?run=${encodeURIComponent(name)}`).then(r => r.json())
+    memory.set(name, fetchMemory(name)
       .then(m => { memory.set(name, m); renderCard(); })
       .catch(e => { memory.set(name, { error: e.message }); renderCard(); }));
   }
@@ -261,10 +272,8 @@ addEventListener('keydown', ev => {
 });
 
 async function load() {
-  const res = await fetch('/api/catalog');
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
-  cat = data;
+  await connect();
+  cat = await fetchCatalog();
   const [kind, id] = decodeURIComponent(location.hash.slice(1)).split('=');
   const ok = kind === 'arch' ? archOf(id) : kind === 'run' ? runOf(id) : null;
   if (ok) open(kind, id); else open('arch', cat.archs[0].id);

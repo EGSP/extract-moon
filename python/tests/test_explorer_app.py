@@ -246,13 +246,17 @@ def test_action_finetune_and_folders(family):
     assert opened == [family / "root", family / "journal.md"]
 
 
-def test_visualizer_starts_service_once(family, monkeypatch):
-    opened, proc = [], object()
-    monkeypatch.setattr("extract_moon.explorer_app.ensure_service", lambda: ("http://127.0.0.1:8765/", proc))
-    monkeypatch.setattr("extract_moon.explorer_app.webbrowser.open", opened.append)
+def test_visualizer_opens_window(family, monkeypatch, tmp_path):
+    exe = tmp_path / "models.exe"
+    opened = []
+    monkeypatch.setattr("extract_moon.explorer_app.MODELS_EXE", exe)
+    monkeypatch.setattr("extract_moon.explorer_app.open_window", lambda: opened.append(True))
     act, _, _ = actions(family)
-    assert act.do("visualizer")["url"] == "http://127.0.0.1:8765/"
-    assert opened == ["http://127.0.0.1:8765/"] and act.visualizer is proc
+    with pytest.raises(UserError):
+        act.do("visualizer")
+    exe.write_bytes(b"")
+    act.do("visualizer")
+    assert opened == [True]
 
 
 @pytest.mark.parametrize("out, speed", [("", 30), ("relative.mp4", 30), ("C:/x.mp4", 0), ("C:/x.mp4", "быстро")])

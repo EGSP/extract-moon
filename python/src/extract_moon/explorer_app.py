@@ -19,7 +19,6 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -27,8 +26,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import provenance
 from .metrics_view import (MIN_EPISODES, all_panels, chain_series, ema, line_style, lineage, load_metrics, n_symbols,
                            PANELS, segment_label, series, signal_panel, summary)
-from .model_viewer import Server, ensure_service
-from .paths import DATA_DIR, EXPLORER_DIST, EXPLORER_EXE, PLAYER_EXE, RUNS_DIR
+from .model_viewer import Server, open_window
+from .paths import DATA_DIR, EXPLORER_DIST, EXPLORER_EXE, MODELS_EXE, PLAYER_EXE, RUNS_DIR
 
 CKPT_RE = re.compile(r"model_(\d+)\.pt$")
 STAGE_RE = re.compile(r"u(\d+)_seed\d+\.jsonl\.gz$")
@@ -340,8 +339,6 @@ class Actions:
     def __init__(self, catalog: Catalog, run=launch, opener=open_path, journal: Path = DATA_DIR / "journal.md",
                  copier=copy_text):
         self.catalog, self.run, self.opener, self.journal, self.copier = catalog, run, opener, journal, copier
-        self.visualizer: subprocess.Popen | None = None
-        self.visualizer_lock = threading.Lock()
 
     def model(self, name: str, update) -> tuple[Path, int, Path]:
         d = self.catalog.path(name)
@@ -362,12 +359,10 @@ class Actions:
             self.opener(self.journal)
             return {}
         if action == "visualizer":
-            with self.visualizer_lock:  # второе нажатие ждёт первое и не поднимает ещё один сервис
-                url, proc = ensure_service()
-                if proc:
-                    self.visualizer = proc
-            webbrowser.open(url)
-            return {"url": url}
+            if not MODELS_EXE.exists():
+                raise UserError("Справочник не собран. Команда сборки: в models_app/README.md.")
+            open_window()
+            return {}
         d = self.catalog.path(run or "")
         if action == "replays":
             if not self.has_replays(d):
@@ -409,11 +404,6 @@ class Actions:
             self.run("player", str(d))
         else:
             raise UserError("У этого запуска пока нет записанных матчей.")
-
-    def close(self) -> None:
-        # Сервис, запущенный проводником, живёт не дольше него: скрытый процесс некому остановить.
-        if self.visualizer:
-            self.visualizer.terminate()
 
 
 class Exports:
@@ -567,7 +557,7 @@ def run_app(runs_dir: Path = RUNS_DIR, port: int = 0, window: bool = True) -> No
     """Открывает окно и держит сервис, пока окно не закрыто. Без окна сервис работает до Ctrl+C."""
     if window and not EXPLORER_EXE.exists():
         raise FileNotFoundError(f"новый проводник не собран: {EXPLORER_EXE}. Сборка описана в explorer_app/README.md")
-    server, token, actions = make_server(runs_dir, port)
+    server, token, _ = make_server(runs_dir, port)
     address = f"http://127.0.0.1:{server.server_port}"
     try:
         if window:
@@ -581,5 +571,4 @@ def run_app(runs_dir: Path = RUNS_DIR, port: int = 0, window: bool = True) -> No
     except KeyboardInterrupt:
         pass
     finally:
-        actions.close()
         server.server_close()

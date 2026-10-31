@@ -78,9 +78,9 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--serve", action="store_true", help="без окна: только сервис и адрес для браузера")
     e.add_argument("--port", type=int, default=0, help="порт сервиса; по умолчанию свободный")
     e.add_argument("--runs-dir", type=Path, default=RUNS_DIR, help="папка запусков")
-    m = sub.add_parser("models", help="3D-справочник архитектур: схемы и модели всех запусков в браузере")
-    m.add_argument("--port", type=int, default=8765)
-    m.add_argument("--no-browser", action="store_true", help="не открывать браузер")
+    m = sub.add_parser("models", help="3D-справочник архитектур: схемы и модели всех запусков в окне на Tauri")
+    m.add_argument("--serve", action="store_true", help="без окна: только сервис и адрес для браузера")
+    m.add_argument("--port", type=int, default=0, help="порт сервиса; по умолчанию свободный")
 
     r = sub.add_parser("record", help="записать реплей матча")
     r.add_argument("--checkpoint", default=None, help="путь к .pt или имя запуска; без него — необученная сеть")
@@ -147,9 +147,9 @@ def main(argv: list[str] | None = None) -> None:
 
         run_app(a.runs_dir, a.port, not a.serve)
     elif a.cmd == "models":
-        from .model_viewer import serve
+        from .model_viewer import run_app
 
-        serve(a.port, not a.no_browser)
+        run_app(a.port, not a.serve)
     elif a.cmd == "record":
         from .replay import record_episode
 

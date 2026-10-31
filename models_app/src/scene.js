@@ -1,9 +1,9 @@
 // 3D-сцена модели: свой компонент на каждый тип блока, потоки частиц по рёбрам, выбор и облёт.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/OrbitControls.js';
-import { CSS2DRenderer, CSS2DObject } from 'three/addons/CSS2DRenderer.js';
-import { RoundedBoxGeometry } from 'three/addons/RoundedBoxGeometry.js';
-import { RoomEnvironment } from 'three/addons/RoomEnvironment.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // Категориальная палитра Carbon для светлой темы.
 export const GROUP_COLORS = { input: '#009d9a', encoder: '#0f62fe', core: '#8a3ffc', heads: '#b28600' };

@@ -523,9 +523,8 @@ function bind() {
     const b = $("visualizer");
     b.disabled = true;
     toast("Запускаю визуализатор");
-    const res = await act("visualizer", null);
+    await act("visualizer", null);
     b.disabled = false;
-    if (res) toast(`Визуализатор: ${res.url}`);
   });
   $("refresh").addEventListener("click", refreshRuns);
   $("toggle-runs").addEventListener("click", () => {

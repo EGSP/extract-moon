@@ -33,3 +33,9 @@ explorer_app/node_modules/
 explorer_app/dist/
 explorer_app/src-tauri/target/
 explorer_app/src-tauri/gen/
+
+# Справочник архитектур на Tauri
+models_app/node_modules/
+models_app/dist/
+models_app/src-tauri/target/
+models_app/src-tauri/gen/

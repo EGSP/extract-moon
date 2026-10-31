@@ -18,14 +18,13 @@ import sys
 import threading
 import time
 import tkinter as tk
-import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import provenance
 from .metrics_view import MIN_EPISODES, MetricsAnimation, all_panels, ema, load_metrics
-from .model_viewer import ensure_service
-from .paths import DATA_DIR, PLAYER_EXE, RUNS_DIR
+from .model_viewer import open_window
+from .paths import DATA_DIR, MODELS_EXE, PLAYER_EXE, RUNS_DIR
 
 REFRESH_MS = 10_000
 FRAME_MS = 33
@@ -201,8 +200,6 @@ class Explorer:
         main.add(right, weight=2)
 
         self.runs: dict[str, dict] = {}
-        self.visualizer_busy = False
-        self.visualizer_proc: subprocess.Popen | None = None
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.tick()
 
@@ -523,27 +520,15 @@ class Explorer:
         MetricsPlayer(self.root, r, LAUNCH_PANEL)
 
     def open_visualizer(self):
-        """Открывает работающий сервис; если его нет, поднимает его в фоне и ждёт готовности."""
-        if self.visualizer_busy:
+        if not MODELS_EXE.exists():
+            messagebox.showinfo("Extract Moon", "Справочник не собран. Команда сборки — в models_app/README.md.")
             return
-        self.visualizer_busy = True
-
-        def finished(kind, value):
-            self.visualizer_busy = False
-            if kind == "error":
-                messagebox.showerror("Extract Moon", f"Не удалось запустить визуализатор:\n{value}")
-                return
-            url, proc = value
-            if proc:
-                self.visualizer_proc = proc
-            webbrowser.open(url)
-
-        in_background(self.root, lambda _: ensure_service(), finished)
+        try:
+            open_window()
+        except OSError as e:
+            messagebox.showerror("Extract Moon", f"Не удалось запустить визуализатор:\n{e}")
 
     def close(self):
-        # Сервис, запущенный этим проводником, живёт не дольше него: скрытый процесс некому остановить.
-        if self.visualizer_proc:
-            self.visualizer_proc.terminate()
         self.root.destroy()
 
     @staticmethod
