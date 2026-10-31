@@ -63,6 +63,14 @@ export class Commands {
     this.save();
   }
 
+  /** Новые границы действия; вид камеры и остальные параметры не меняются. */
+  resize(id, start, end) {
+    const c = this.list.find((x) => x.id === id);
+    c.start = start;
+    c.end = end;
+    this.save();
+  }
+
   /** speed — тактов в секунду: скорость вращения задана в градусах за секунду ролика. */
   pose(tick, speed) {
     const on = this.enabled;

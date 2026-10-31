@@ -3,7 +3,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { gaussian, sampleCurve, unwrapAngles } from "./track.js";
+import { gaussian, headingCurve, sampleCurve } from "./track.js";
 import { ACTION_ICONS, badgeTexture, factionColor, glintTexture, glowTexture, labelTexture, slotTexture } from "./icons.js";
 
 export const LAUNCH_TAIL = 8; // тактов после конца матча: корабль набирает высоту
@@ -42,6 +42,9 @@ function spriteOf(tex = null) {
 }
 
 const lerp = (a, b, k) => a + (b - a) * k;
+
+/** Высота корабля через tail тактов после конца матча. */
+export const shipLift = (tail) => 0.14 * tail ** 3 + 0.5 * tail;
 
 function lerpAngle(a, b, k) {
   const d = ((b - a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
@@ -377,7 +380,7 @@ export class World {
     const last = this.rep.frames.length - 1;
     const tail = Math.max(tick - last, 0);
     const launched = !!this.rep.header.result?.launched;
-    const lift = launched ? 0.14 * tail ** 3 + 0.5 * tail : 0;
+    const lift = launched ? shipLift(tail) : 0;
     const x = sh.x + 0.5;
     const z = sh.y + 0.5;
     this.ship.position.set(x, lift, z);
@@ -856,11 +859,26 @@ export class World {
     this.dirty = true;
   }
 
-  /** Камера над роботом: цель сохранённого вида переносится на робота. */
-  followRobot(state, id, tick, startYaw, rotate) {
+  /** Кадр кинокамеры. Камера может стоять ниже цели, поэтому запрет взгляда снизу на время кадра снят. */
+  applyPose({ position, target }) {
+    this.applying = true;
+    this.setOrthographic(false);
+    const { maxPolarAngle, minDistance } = this.controls;
+    this.controls.maxPolarAngle = Math.PI;
+    this.controls.minDistance = 0;
+    this.camera.position.set(...position);
+    this.controls.target.set(...target);
+    this.controls.update();
+    Object.assign(this.controls, { maxPolarAngle, minDistance });
+    this.applying = false;
+    this.dirty = true;
+  }
+
+  /** Камера над роботом: цель сохранённого вида переносится на робота, поворот считается от такта начала. */
+  followRobot(state, id, tick, startTick, rotate) {
     const point = this.smoothPoint(id, tick);
     const to = new THREE.Vector3(point[0], state.target[1], point[1]);
-    const angle = rotate ? this.smoothYaw(id, tick) - startYaw : 0;
+    const angle = rotate ? this.smoothYaw(id, tick) - this.smoothYaw(id, startTick) : 0;
     this.applyCamera(state, angle, new THREE.Vector3(...state.target), to);
   }
 
@@ -875,11 +893,12 @@ export class World {
       return values.map((v) => (cur = v ?? cur));
     };
     const cells = hold(layout.map((m) => m.get(id)));
-    const yaws = hold(yaw.map((m) => m.get(id))).map((a) => a ?? 0);
+    const xs = cells.map((p) => p[0]);
+    const zs = cells.map((p) => p[1]);
     const track = {
-      x: gaussian(cells.map((p) => p[0]), TRACK_SIGMA),
-      z: gaussian(cells.map((p) => p[1]), TRACK_SIGMA),
-      yaw: gaussian(unwrapAngles(yaws), YAW_SIGMA),
+      x: gaussian(xs, TRACK_SIGMA),
+      z: gaussian(zs, TRACK_SIGMA),
+      yaw: gaussian(headingCurve(xs, zs, yaw[0]?.get(id) ?? 0), YAW_SIGMA),
     };
     this.rep.tracks.set(id, track);
     return track;

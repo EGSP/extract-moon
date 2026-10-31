@@ -7,13 +7,15 @@ import "@fontsource/ibm-plex-sans/greek-400.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/cyrillic-400.css";
 import "./style.css";
+import { ClipTrack } from "./clips.js";
 import { Commands } from "./commands.js";
+import { Director, MODES } from "./director.js";
 import { renderVideo } from "./export.js";
 import { Gizmo } from "./gizmo.js";
 import { factionColor, iconSvg, LEGEND, onColor, preloadIcons } from "./icons.js";
-import { loadStage, openFolder, saveOutput, stages } from "./replay.js";
+import { finishJob, loadStage, openFolder, renderJob, saveOutput, stages } from "./replay.js";
 import { chooseRanges, rangesLength, splitTimeline, tickInRanges } from "./timeline.js";
-import { LAUNCH_TAIL, World } from "./world.js";
+import { LAUNCH_TAIL, shipLift, World } from "./world.js";
 
 // Скорость воспроизведения, тактов в секунду, как в старом проигрывателе.
 const SPEEDS = [0.5, 1, 2, 4, 8, 16, 32];
@@ -30,7 +32,17 @@ const $ = (id) => document.getElementById(id);
 const canvas = $("scene");
 const world = new World(canvas);
 const commands = new Commands();
+const directors = new Map();
 const state = { rep: null, list: [], tick: 0, playing: false, speed: 0, smooth: true, exporting: false, shownIdx: -1, arming: null };
+const clips = new ClipTrack($("clips"), {
+  commands,
+  span: () => maxTick(),
+  title: (c) => commandTitle(c),
+  marks: (c) => (c.type === "cinema" ? directorOf(c).cuts : []),
+  onDrag: () => { commands.follow = true; draw(); },
+  onDrop: () => showCommands(),
+  onPick: (c) => { state.tick = c.start; commands.follow = true; showCommands(); draw(); },
+});
 
 const lastFrame = () => state.rep.frames.length - 1;
 const maxTick = () => lastFrame() + (state.rep.header.result?.launched ? LAUNCH_TAIL : 0);
@@ -66,11 +78,12 @@ async function openStage(name) {
   const rep = await loadStage(name);
   state.rep = rep;
   world.setReplay(rep);
+  directors.clear();
   commands.load(`commands:${rep.header.model.checkpoint ?? name}:${rep.header.seed}`);
-  showCommands();
   state.tick = Math.min(state.tick, maxTick());
   state.shownIdx = -1;
   $("seek").max = maxTick();
+  showCommands();
   const model = rep.header.model;
   $("match").textContent = `карта ${rep.header.seed}, размер ${rep.header.map.size}, модель: обновление ${model.update}`;
   document.title = `Extract Moon — ${name}`;
@@ -176,8 +189,21 @@ function followCommands(tick) {
   const pose = commands.pose(tick, SPEEDS[state.speed]);
   if (!pose) return;
   const c = pose.command;
-  if (c.type === "follow") world.followRobot(c.camera, c.robot, pose.tick, c.yaw, c.rotate);
+  if (c.type === "follow") world.followRobot(c.camera, c.robot, pose.tick, c.start, c.rotate);
+  else if (c.type === "cinema") world.applyPose(directorOf(c).pose(pose.tick));
   else world.applyCamera(c.camera, pose.angle);
+}
+
+/** План кинокамеры зависит от границ клипа и скорости, поэтому строится заново только при их смене. */
+function directorOf(c) {
+  const speed = SPEEDS[state.speed];
+  const to = c.end ?? maxTick();
+  const key = [c.id, c.mode, c.start, to, speed].join();
+  if (!directors.has(key)) {
+    const seed = c.id + state.rep.header.seed;
+    directors.set(key, new Director(state.rep, world, { mode: c.mode, seed, from: c.start, to, speed, shipLift }));
+  }
+  return directors.get(key);
 }
 
 function draw() {
@@ -185,6 +211,7 @@ function draw() {
   if (commands.follow) followCommands(state.tick);
   world.update(shownTick(state.tick));
   $("seek").value = state.tick;
+  clips.seek(state.tick);
   showPanels();
 }
 
@@ -216,11 +243,13 @@ const ACTIONS_BY_NAME = {
   pin() { showTab("commands"); pinCamera(); },
   followPlain() { showTab("commands"); toggleFollow(false); },
   followTurn() { showTab("commands"); toggleFollow(true); },
+  cinema() { showTab("commands"); toggleCinema(); },
 };
 
 function setSpeed(i) {
   state.speed = Math.max(0, Math.min(i, SPEEDS.length - 1));
   $("speed").value = state.speed;
+  if (state.rep) showCommands(); // длительность планов кинокамеры задана в секундах ролика
 }
 
 function setOrtho(on) {
@@ -312,20 +341,38 @@ async function exportVideo() {
   const speed = SPEEDS[state.speed];
   const [width, height] = videoSize();
   const span = maxTick();
-  const camera = world.cameraState();
-  const animated = commands.enabled.length > 0;
-  const list = commands.enabled;
-  const settings = { smooth: state.smooth, ...world.options, selectedRobot: world.selected };
   const ranges = await chooseRanges({
-    parts: splitTimeline(list, span, commandTitle),
+    parts: splitTimeline(commands.enabled, span, commandTitle),
     span,
     speed,
     sizeText: `${width} × ${height}, ${FPS} кадров в секунду, ${speedLabel(speed)}`,
   });
-  if (!ranges) {
-    state.exporting = false;
-    return;
-  }
+  if (ranges) await renderRanges(ranges, width, height);
+  state.exporting = false;
+}
+
+/** Строки подписи в углу ролика: какая модель, из какого прогона и на каком матче. */
+function legendLines() {
+  const { header, name } = state.rep;
+  const { checkpoint, update, steps } = header.model;
+  const run = checkpoint?.match(/runs[\\/]([^\\/]+)[\\/]/)?.[1] ?? name;
+  const millions = (steps / 1e6).toFixed(1).replace(".", ",");
+  return [
+    `Модель: обновление ${update}, ${millions} млн шагов, блоков памяти ${header.config.model.n_layers}`,
+    `Прогон: ${run}`,
+    `Матч: карта ${header.seed}, поле ${header.map.size} × ${header.map.size}`,
+  ];
+}
+
+/** stem задаёт имя файла и означает пакетный рендер: ошибка уходит вызывающему, а не в сообщение на экране. */
+async function renderRanges(ranges, width, height, stem = null) {
+  const speed = SPEEDS[state.speed];
+  const span = maxTick();
+  const camera = world.cameraState();
+  const animated = commands.enabled.length > 0;
+  const list = commands.enabled;
+  const legend = $("legend").checked ? legendLines() : [];
+  const settings = { smooth: state.smooth, ...world.options, selectedRobot: world.selected, legend };
   const frames = Math.max(Math.round((rangesLength(ranges) / speed) * FPS), 1) + 1;
   let stop = false;
   $("modal-cancel").onclick = () => { stop = true; };
@@ -334,7 +381,7 @@ async function exportVideo() {
   $("modal").hidden = false;
   try {
     const result = await renderVideo({
-      world, canvas, width, height, fps: FPS, frames,
+      world, canvas, width, height, fps: FPS, frames, legend,
       tickAt: (j) => {
         const tick = tickInRanges(ranges, (j * speed) / FPS);
         if (animated) followCommands(tick);
@@ -344,18 +391,18 @@ async function exportVideo() {
       cancelled: () => stop,
     });
     if (result) {
-      const stem = `${state.rep.name}_3d${animated ? "_anim" : ""}`;
-      const file = `${stem}.mp4`;
+      const name = stem ?? `${state.rep.name}_3d${animated ? "_anim" : ""}`;
+      const file = `${name}.mp4`;
       const path = await saveOutput(state.rep.name, "video", file, result.bytes);
       const meta = exportMeta(file, result.video, speed, ranges, span, camera, settings, list);
-      await saveOutput(state.rep.name, "video", `${stem}.json`, new TextEncoder().encode(meta));
+      await saveOutput(state.rep.name, "video", `${name}.json`, new TextEncoder().encode(meta));
       toast(`Видео и параметры сохранены: ${path}`);
     }
   } catch (e) {
     toast(`Видео не сохранено: ${e.message ?? e}`, true);
+    if (stem) throw e;
   }
   $("modal").hidden = true;
-  state.exporting = false;
   if (animated) world.applyCamera(camera); // вид до экспорта
   showProjection();
   draw();
@@ -366,6 +413,7 @@ async function exportVideo() {
 function commandTitle(c) {
   if (c.type === "pin") return "Вид камеры";
   if (c.type === "follow") return `За роботом #${c.robot}${c.rotate ? ", с поворотом" : ""}`;
+  if (c.type === "cinema") return `Кинокамера: ${MODES[c.mode].title}`;
   const sign = c.rate < 0 ? "−" : "";
   return `Вращение ${sign}${Math.abs(c.rate)}°/с`;
 }
@@ -378,6 +426,12 @@ function showCommands() {
   orbit.innerHTML = orbiting
     ? `${iconSvg("stopFilled", 16)}<span>Остановить</span>`
     : `${iconSvg("rotate", 16)}<span>Начать вращение</span>`;
+  const filming = active?.type === "cinema";
+  const cinema = $("cinema");
+  cinema.classList.toggle("recording", filming);
+  cinema.innerHTML = filming
+    ? `${iconSvg("stopFilled", 16)}<span>Остановить</span>`
+    : `${iconSvg("video", 16)}<span>Кинокамера</span>`;
   $("follow").checked = commands.follow;
   for (const [id, rotate, icon, text] of [["follow-plain", false, "location", "Следовать за роботом"], ["follow-turn", true, "compass", "Следовать с поворотом"]]) {
     const live = active?.type === "follow" && active.rotate === rotate;
@@ -399,6 +453,8 @@ function showCommands() {
   $("command-list").innerHTML = rows.length
     ? `<table><thead><tr><th></th><th>Действие</th><th>с такта</th><th>до</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`
     : '<p class="note">Пока пусто. Начните вращение или запомните вид: команда появится здесь с текущим тактом.</p>';
+  clips.render();
+  clips.seek(state.tick);
   const animated = commands.enabled.length > 0;
   const exportButton = $("export");
   exportButton.innerHTML = `${iconSvg(animated ? "starFilled" : "video", 16)}<span>${animated ? "Видео с анимацией" : "Видео"}</span>`;
@@ -436,9 +492,33 @@ function toggleFollow(rotate) {
 function startFollow(robot, rotate) {
   state.arming = null;
   commands.stop(state.tick);
-  const yaw = world.smoothYaw(robot, state.tick);
-  commands.add("follow", state.tick, world.cameraState(), { robot, rotate, yaw });
+  commands.add("follow", state.tick, world.cameraState(), { robot, rotate });
   if (!state.playing && state.tick < maxTick()) setPlaying(true);
+  draw();
+}
+
+function toggleCinema() {
+  if (!state.rep) return;
+  state.arming = null;
+  const was = commands.recording?.type === "cinema";
+  commands.stop(state.tick);
+  if (!was) {
+    commands.add("cinema", state.tick, world.cameraState(), { mode: $("cinema-mode").value });
+    draw();
+    if (!state.playing && state.tick < maxTick()) setPlaying(true);
+  }
+  showCommands();
+}
+
+/** Весь матч одним клипом: границы потом можно поправить на полосе над шкалой. */
+function cinemaWholeMatch() {
+  if (!state.rep) return;
+  state.arming = null;
+  commands.stop(state.tick);
+  commands.add("cinema", 0, world.cameraState(), { mode: $("cinema-mode").value });
+  commands.stop(maxTick());
+  state.tick = 0;
+  showCommands();
   draw();
 }
 
@@ -477,6 +557,11 @@ function bindUi() {
   $("tab-commands").onclick = () => showTab("commands");
   $("orbit").onclick = toggleOrbit;
   $("pin-camera").onclick = pinCamera;
+  $("cinema").onclick = toggleCinema;
+  $("cinema-all").onclick = cinemaWholeMatch;
+  $("cinema-all").innerHTML = `${iconSvg("video", 16)}<span>Кинокамера на весь матч</span>`;
+  $("cinema-mode").innerHTML = Object.entries(MODES).map(([k, m]) => `<option value="${k}">${m.title}</option>`).join("");
+  $("cinema-mode").value = "reporter";
   $("follow-plain").onclick = () => toggleFollow(false);
   $("follow-turn").onclick = () => toggleFollow(true);
   $("pin-camera").innerHTML = `${iconSvg("pin", 16)}<span>Запомнить вид</span>`;
@@ -535,7 +620,7 @@ function bindUi() {
 
   const keys = {
     " ": "play", ArrowLeft: "prev", ArrowRight: "next", ArrowUp: "faster", ArrowDown: "slower", v: "vision", h: "icons",
-    i: "smooth", s: "shot", m: "video", o: "folder", 5: "ortho", r: "orbit", p: "pin", f: "followPlain", g: "followTurn",
+    i: "smooth", s: "shot", m: "video", o: "folder", 5: "ortho", r: "orbit", p: "pin", f: "followPlain", g: "followTurn", c: "cinema",
   };
   window.addEventListener("keydown", (e) => {
     if (state.exporting || e.target.tagName === "SELECT") return;
@@ -568,11 +653,40 @@ function showEmpty(text) {
   el.textContent = text;
 }
 
+/** Задание рендера из файла: один клип кинокамеры, без диалогов. Окно закрывается само. */
+async function runJob(text) {
+  const job = JSON.parse(text);
+  try {
+    world.options.icons = job.icons ?? true;
+    world.options.vision = job.vision ?? true;
+    $("legend").checked = job.legend ?? true;
+    state.speed = SPEEDS.indexOf(job.speed);
+    if (state.speed < 0) throw new Error(`скорости ${job.speed} нет в списке`);
+    const from = job.from ?? 0;
+    const to = Math.min(job.to ?? maxTick(), maxTick());
+    commands.key = "job";
+    commands.list = [];
+    commands.add("cinema", from, world.cameraState(), { mode: job.mode });
+    commands.stop(to);
+    state.exporting = true;
+    await renderRanges([[from, to]], job.width ?? 1920, job.height ?? 1080, job.stem);
+  } catch (e) {
+    await saveOutput(state.rep.name, "video", `${job.stem}.error.txt`, new TextEncoder().encode(String(e?.stack ?? e)));
+  }
+  await finishJob();
+}
+
 async function start() {
   bindUi();
   world.resize();
   await Promise.all([preloadIcons(), document.fonts.load('42px "IBM Plex Mono"', "α1"), world.load()]);
   const current = await refreshStages();
+  const job = await renderJob();
+  if (job) {
+    await openStage(current);
+    await runJob(job);
+    return;
+  }
   if (!current) {
     showEmpty("Реплей не выбран. Откройте матч кнопкой «Новый плеер» в проводнике запусков.");
   } else {

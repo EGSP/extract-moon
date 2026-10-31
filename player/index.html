@@ -55,6 +55,11 @@
             <button id="follow-plain" class="ghost wide" title="Камера едет за роботом и не поворачивается (F)"></button>
             <button id="follow-turn" class="ghost wide" title="Камера едет за роботом и поворачивается в сторону его движения (G)"></button>
             <button id="pin-camera" class="ghost wide" title="Запомнить текущий вид с этого такта (P)"></button>
+            <div class="command-row">
+              <button id="cinema" class="primary-text" title="Начать или остановить съёмку кинокамерой (C)"></button>
+              <select id="cinema-mode" aria-label="Режим кинокамеры"></select>
+            </div>
+            <button id="cinema-all" class="ghost wide" title="Снять весь матч кинокамерой в выбранном режиме"></button>
             <p id="arm-hint" class="note" hidden>Нажмите на робота в сцене. Расстояние камеры возьмётся из текущего вида.</p>
             <label class="check"><input id="follow" type="checkbox" checked /> Камера следует за командами</label>
             <p class="note">Камера начинает с вида, сохранённого в первой команде. Если подвинуть её вручную, слежение выключится.</p>
@@ -69,7 +74,10 @@
 
     <footer id="transport">
       <div id="timeline">
-        <input id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Такт" />
+        <div id="track">
+          <div id="clips" hidden></div>
+          <input id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Такт" />
+        </div>
         <span id="tick" class="readout"></span>
       </div>
       <div id="tools">
@@ -109,6 +117,7 @@
           <span class="muted">×</span>
           <input id="custom-h" type="number" min="64" max="2160" step="2" value="800" aria-label="Высота видео" />
         </span>
+        <label id="legend-check" class="check" title="Модель, прогон и матч в углу ролика"><input id="legend" type="checkbox" checked />Легенда</label>
         <div class="group">
           <button id="shot" class="ghost" title="Снимок кадра (S)"></button>
           <button id="export" class="ghost" title="Видео MP4 с текущей камерой и настройками (M)"></button>

@@ -18,8 +18,29 @@ async function pickCodec(width, height, bitrate, framerate) {
   throw new Error("WebView2 не предоставляет кодировщик H.264 или VP9");
 }
 
-/** tickAt(j) — дробный такт кадра j с учётом скорости и плавности. */
-export async function renderVideo({ world, canvas, width, height, fps, frames, tickAt, onProgress, cancelled }) {
+/** Подпись в нижнем левом углу кадра: готовая картинка, на кадр она только накладывается. */
+function legendImage(lines, height) {
+  const scale = height / 1080;
+  const size = Math.round(15 * scale);
+  const pad = Math.round(10 * scale);
+  const step = Math.round(21 * scale);
+  const font = `${size}px "IBM Plex Mono", Consolas, monospace`;
+  const image = document.createElement("canvas");
+  const g = image.getContext("2d");
+  g.font = font;
+  image.width = Math.ceil(Math.max(...lines.map((l) => g.measureText(l).width))) + pad * 2;
+  image.height = step * lines.length + pad * 2;
+  g.font = font; // смена размера холста сбрасывает шрифт
+  g.fillStyle = "rgba(22, 22, 22, 0.72)";
+  g.fillRect(0, 0, image.width, image.height);
+  g.fillStyle = "#f4f4f4";
+  g.textBaseline = "middle";
+  lines.forEach((l, i) => g.fillText(l, pad, pad + step * (i + 0.5)));
+  return { image, margin: Math.round(24 * scale) };
+}
+
+/** tickAt(j) — дробный такт кадра j с учётом скорости и плавности. legend — строки подписи, пустой список её отключает. */
+export async function renderVideo({ world, canvas, width, height, fps, frames, legend = [], tickAt, onProgress, cancelled }) {
   const w = width & ~1; // кодеку нужны чётные размеры
   const h = height & ~1;
   const bitrate = Math.round(w * h * fps * 0.14);
@@ -35,13 +56,20 @@ export async function renderVideo({ world, canvas, width, height, fps, frames, t
 
   world.renderer.setPixelRatio(1);
   world.setRenderSize(w, h, false);
+  const sign = legend.length ? legendImage(legend, h) : null;
+  const composed = sign ? new OffscreenCanvas(w, h) : null;
+  const paint = composed?.getContext("2d");
   try {
     for (let j = 0; j < frames; j++) {
       if (cancelled()) return null;
       if (failure) throw failure;
       world.update(tickAt(j));
       world.render();
-      const frame = new VideoFrame(canvas, { timestamp: Math.round((j * 1e6) / fps), duration: Math.round(1e6 / fps) });
+      if (sign) {
+        paint.drawImage(canvas, 0, 0, w, h);
+        paint.drawImage(sign.image, sign.margin, h - sign.margin - sign.image.height);
+      }
+      const frame = new VideoFrame(composed ?? canvas, { timestamp: Math.round((j * 1e6) / fps), duration: Math.round(1e6 / fps) });
       encoder.encode(frame, { keyFrame: j % (fps * 2) === 0 });
       frame.close();
       // Очередь кодировщика ограничена: иначе кадры 1080p быстро займут память.

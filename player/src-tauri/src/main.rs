@@ -137,11 +137,23 @@ fn open_folder(target: State<Target>, name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Задание рендера из переменной EXTRACT_MOON_JOB: интерфейс снимает ролик и закрывает окно.
+#[tauri::command]
+fn render_job() -> Result<Option<String>, String> {
+    let Ok(path) = std::env::var("EXTRACT_MOON_JOB") else { return Ok(None) };
+    fs::read_to_string(path).map(Some).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn finish_job(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn main() {
     let target = std::env::args().nth(1).map(|a| fs::canonicalize(&a).unwrap_or_else(|_| PathBuf::from(a)));
     tauri::Builder::default()
         .manage(Target(target))
-        .invoke_handler(tauri::generate_handler![stages, load_stage, save_output, open_folder])
+        .invoke_handler(tauri::generate_handler![stages, load_stage, save_output, open_folder, render_job, finish_job])
         .run(tauri::generate_context!())
         .expect("не удалось запустить окно проигрывателя");
 }

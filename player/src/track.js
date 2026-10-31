@@ -1,18 +1,35 @@
 // Плавные кривые для камеры. Робот меняет клетку и направление скачком, поэтому камера
 // идёт не за ним напрямую, а по значениям тактов, сглаженным заранее и интерполированным между тактами.
 
-/** Убирает скачки через ±π: каждый угол берётся ближайшим к предыдущему. */
-export function unwrapAngles(values) {
-  const out = [];
-  values.forEach((a, i) => {
-    if (i === 0) {
-      out.push(a);
-      return;
-    }
-    const d = ((a - out[i - 1] + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-    out.push(out[i - 1] + d);
+const HEADING_REACH = 5; // тактов в каждую сторону: курс считается по смещению за это окно
+const HEADING_MIN_MOVE = 1.2; // клеток: меньшее смещение за окно считается топтанием на месте
+const HEADING_MAX_TURN = 0.25; // радиан за такт
+const REVERSAL = 2.6; // радиан: разворот почти на 180°, у которого нет короткого направления
+
+const shortest = (d) => ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+
+/** Курс по пути робота, неразрывный по тактам. Шаги влево-вправо и стоянка курс не меняют.
+ *  Разворот возвращает курс к исходному, поэтому движение туда-обратно не накапливает обороты. */
+export function headingCurve(xs, zs, fallback = 0) {
+  const last = xs.length - 1;
+  const target = xs.map((_, i) => {
+    const a = Math.max(i - HEADING_REACH, 0);
+    const b = Math.min(i + HEADING_REACH, last);
+    const dx = xs[b] - xs[a];
+    const dz = zs[b] - zs[a];
+    return Math.hypot(dx, dz) >= HEADING_MIN_MOVE ? Math.atan2(dx, dz) : null;
   });
-  return out;
+  const home = target.find((v) => v !== null) ?? fallback;
+  let cur = home;
+  return target.map((aim) => {
+    if (aim === null) return cur;
+    let d = shortest(aim - cur);
+    if (Math.abs(d) > REVERSAL && Math.abs(cur + d - home) > Math.abs(cur + d - Math.sign(d) * 2 * Math.PI - home)) {
+      d -= Math.sign(d) * 2 * Math.PI;
+    }
+    cur += Math.min(Math.max(d, -HEADING_MAX_TURN), HEADING_MAX_TURN);
+    return cur;
+  });
 }
 
 /** Гауссово сглаживание; за краями повторяются крайние значения. */

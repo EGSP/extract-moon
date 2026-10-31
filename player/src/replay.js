@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const stages = () => invoke("stages");
 export const openFolder = (name) => invoke("open_folder", { name });
+export const renderJob = () => invoke("render_job");
+export const finishJob = () => invoke("finish_job");
 
 export function saveOutput(replay, kind, file, bytes) {
   return invoke("save_output", bytes, { headers: { "x-replay": replay, "x-kind": kind, "x-file": file } });

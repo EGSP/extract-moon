@@ -8,6 +8,10 @@ const SURFACE = "#f4f4f4";
 const CURSOR = "#161616";
 const CHOSEN = "#da1e28";
 const FONT = '11px "IBM Plex Sans", "Segoe UI", sans-serif';
+const RUN_FONT = '600 26px "IBM Plex Sans", "Segoe UI", sans-serif';
+const RUN_LINE = 30;
+const RUN_ALPHA = 0.22;
+const RUN_LEVEL = 0.72; // доля шкалы, если свободной полосы на участке нет
 const DASH = { "-": [], "--": [6, 4], ":": [2, 3], "-.": [6, 3, 2, 3] };
 export const color = (i) => COLORS[i % COLORS.length];
 
@@ -52,6 +56,44 @@ function fit(canvas) {
     canvas.height = h * ratio;
   }
   return { w, h, ratio };
+}
+
+/** Уровень подписи: середина самой широкой свободной полосы над кривой участка или под ней. */
+export function freeLevel(values) {
+  if (!values.length) return RUN_LEVEL;
+  const hi = Math.max(...values);
+  const lo = Math.min(...values);
+  const above = 1 - hi;
+  if (above < 0.25 && lo < 0.25) return RUN_LEVEL;
+  return above >= lo ? hi + above / 2 : lo / 2;
+}
+
+/** Сокращает строку по центру: начало и конец имени запуска различают его лучше всего. */
+export function middleTruncate(g, text, width) {
+  if (g.measureText(text).width <= width) return text;
+  for (let keep = text.length - 1; keep >= 2; keep--) {
+    const head = text.slice(0, Math.ceil(keep / 2));
+    const tail = text.slice(text.length - Math.floor(keep / 2));
+    if (g.measureText(`${head}…${tail}`).width <= width) return `${head}…${tail}`;
+  }
+  return null;
+}
+
+/** Строки подписи при неизменном размере шрифта: перенос по дефисам и подчёркиваниям, иначе сокращение по центру. */
+export function fitLabel(g, label, width, maxLines) {
+  const lines = [];
+  for (const part of label.match(/[^-_]+[-_]*/g) ?? [label]) {
+    const joined = lines.length ? lines[lines.length - 1] + part : part;
+    if (lines.length && g.measureText(joined).width <= width) lines[lines.length - 1] = joined;
+    else lines.push(part);
+  }
+  if (lines.length <= maxLines && lines.every((l) => g.measureText(l).width <= width)) return lines;
+  if (lines.length <= maxLines) {
+    const short = lines.map((l) => middleTruncate(g, l, width));
+    if (short.every(Boolean)) return short;
+  }
+  const one = middleTruncate(g, label, width);
+  return one ? [one] : [];
 }
 
 function trace(g, xs, ys, from, to, px, py) {
@@ -330,6 +372,23 @@ export function drawTimeline(canvas, run, selected, cursor = null) {
   }
 
   const { xs, smooth, segments, joints } = run.timeline;
+  // Имена прогонов под кривой: по ширине в центре своего участка, по высоте в свободной полосе, шрифт постоянный.
+  g.save();
+  g.font = RUN_FONT;
+  g.globalAlpha = RUN_ALPHA;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  segments.forEach((s, i) => {
+    const from = i ? x(xs[s.from]) : left;
+    const to = i < segments.length - 1 ? x(xs[s.to - 1]) : right;
+    const lines = fitLabel(g, s.label, to - from - 12, Math.max(Math.floor((bottom - top) / RUN_LINE), 1));
+    const half = (lines.length * RUN_LINE) / 2;
+    const level = Math.min(Math.max(y(freeLevel(smooth.slice(s.from, s.to))), top + half), bottom - half);
+    g.fillStyle = color(s.color);
+    lines.forEach((line, n) => g.fillText(line, (from + to) / 2, level + (n - (lines.length - 1) / 2) * RUN_LINE));
+  });
+  g.restore();
+
   g.lineJoin = "round";
   g.lineWidth = 2;
   for (const s of segments) {
